@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="banner.svg" alt="Biotech Agentic System Banner" width="100%">
+  <img src="banner.svg" alt="Biotech Agentic System Banner" style="width:100%">
 </p>
 
 # Biotech Agentic System
@@ -53,7 +53,7 @@ The following reference implementations demonstrate stateful orchestration, clie
 The following implementation utilizes LangGraph to define a structured clinical safety reporting workflow. It implements validation scoring, state checkpointing, and cycle limits to prevent runaway execution.
 
 ```python
-from typing import Annotated, Dict, Any, List
+from typing import Dict, Any, List
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, END
 
@@ -125,7 +125,8 @@ This module provides client-side anonymization, stripping Protected Health Infor
 ```python
 import os
 import re
-from typing import Dict, Any, Tuple
+import secrets
+from typing import Dict, Any
 from cryptography.fernet import Fernet
 
 class ClinicalDeidentifier:
@@ -149,9 +150,10 @@ class ClinicalDeidentifier:
 
     def anonymize_patient_record(self, raw_record: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Removes direct HIPAA identifiers and tokenizes patient IDs (USUBJID)
-        prior to transmitting payloads to external LLM endpoints.
-        Note: The token mappings are maintained internally on the instance.
+        Removes `patient_name` and `ssn` fields, tokenizes `subject_id` to an opaque
+        random token (SUBJ-ANON-<hex>), and redacts email addresses and phone numbers
+        from `clinical_notes` using regular expressions. Token-to-encrypted-ID mappings
+        are maintained internally on the instance for subsequent re-identification.
         """
         anonymized = raw_record.copy()
         
@@ -165,7 +167,7 @@ class ClinicalDeidentifier:
         raw_id = str(anonymized.get("subject_id", ""))
         if raw_id:
             if raw_id not in self._token_registry:
-                token = f"SUBJ-ANON-{len(self._token_registry) + 1001}"
+                token = f"SUBJ-ANON-{secrets.token_hex(8)}"
                 encrypted_raw_id = self._encrypt_value(raw_id)
                 
                 # Store mapping securely within secure infrastructure boundaries
@@ -186,7 +188,7 @@ class ClinicalDeidentifier:
     def reidentify_narrative(self, llm_output_text: str) -> str:
         """Re-injects true patient identities into local text files post-generation."""
         reidentified_text = llm_output_text
-        tokens_found = re.findall(r'SUBJ-ANON-\d+', reidentified_text)
+        tokens_found = re.findall(r'SUBJ-ANON-[0-9a-f]+', reidentified_text)
         
         for token in tokens_found:
             if token in self._reverse_registry:
