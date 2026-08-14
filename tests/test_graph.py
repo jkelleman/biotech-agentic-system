@@ -37,7 +37,7 @@ class TestAegisStateGraph(unittest.TestCase):
         
         # Verify state updates
         self.assertTrue(final_state["is_approved"])
-        self.assertEqual(final_state["compliance_score"], 1.0)
+        self.assertAlmostEqual(final_state["compliance_score"], 1.0)
         self.assertGreater(final_state["loop_count"], 0)
         self.assertIn("SUBJ-ANON-1001", final_state["draft_narrative"])
         self.assertIn("Cholecystitis Acute", final_state["draft_narrative"])

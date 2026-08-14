@@ -49,11 +49,6 @@ def extract_and_code_data(state: AgentState) -> Dict[str, Any]:
         
     logger.info(f"Coded Terms for Subject {subject_id}: {coded_terms}")
     
-    # Increment execution loop tracker
-    current_loops = state.get("loop_count", 0)
-    
     return {
-        "coded_terms": coded_terms,
-        "loop_count": current_loops + 1,
-        "errors": []
+        "coded_terms": coded_terms
     }

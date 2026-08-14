@@ -28,7 +28,7 @@ def route_after_qc(state: AgentState) -> str:
     compliance_score = state.get("compliance_score", 0.0)
     
     # 5 is our max loop count limit
-    if loop_count > 5:
+    if loop_count >= 5:
         logger.warning(f"Loop count exceeded ({loop_count}). Routing to Force Human Intervention / END.")
         return "force_human_intervention"
         

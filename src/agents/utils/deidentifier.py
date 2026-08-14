@@ -18,11 +18,11 @@ class ClinicalDeidentifier:
         self._reverse_registry: Dict[str, str] = {}
 
     def _encrypt_value(self, value: str) -> str:
-        """Encrypts sensitive demographic or subject IDs into secure cyphertext."""
+        """Encrypts sensitive demographic or subject IDs into secure ciphertext."""
         return self.cipher.encrypt(value.encode('utf-8')).decode('utf-8')
 
     def _decrypt_value(self, encrypted_value: str) -> str:
-        """Decrypts a cyphertext token back to its original patient identifier."""
+        """Decrypts a ciphertext token back to its original patient identifier."""
         return self.cipher.decrypt(encrypted_value.encode('utf-8')).decode('utf-8')
 
     def anonymize_patient_record(self, raw_record: Dict[str, Any]) -> Dict[str, Any]:

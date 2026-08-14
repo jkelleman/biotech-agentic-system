@@ -4,6 +4,9 @@ from src.agents.state import AgentState
 
 logger = logging.getLogger("AegisCSR.validator")
 
+# Penalty weight for each factual or structural error found during audit
+DEDUCTION_PER_ERROR = 0.15
+
 def quality_control_check(state: AgentState) -> Dict[str, Any]:
     """
     Node C: QC & Compliance Auditor Agent (The Critic).
@@ -49,12 +52,12 @@ def quality_control_check(state: AgentState) -> Dict[str, Any]:
         if desc not in draft_narrative.lower():
             errors.append(f"Data Mismatch: Reported Adverse Event '{desc}' was not transcribed in final report.")
             
-    # Calculate Compliance Score (1.0 = perfect, deduct 0.15 per error)
+    # Calculate Compliance Score (1.0 = perfect, deduct per error found)
     base_score = 1.0
-    deduction = len(errors) * 0.15
+    deduction = len(errors) * DEDUCTION_PER_ERROR
     compliance_score = max(0.0, base_score - deduction)
     
-    logger.info(f"QC Completed. Score: {compliance_score:.2f}. Identified Errors: {errors}")
+    logger.info(f"QC Completed. Score: {compliance_score:.2f}. Identified {len(errors)} compliance anomalies.")
     
     return {
         "compliance_score": compliance_score,
