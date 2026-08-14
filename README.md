@@ -130,7 +130,8 @@ from cryptography.fernet import Fernet
 
 class ClinicalDeidentifier:
     def __init__(self):
-        # In production, retrieve keys from a secure vault (e.g., AWS KMS)
+        # NOTE: A persistent key must be loaded from a secure vault (e.g., AWS KMS) in production.
+        # Generating a key in __init__ is for demonstration and limits decryption to the current instance.
         self.encryption_key = Fernet.generate_key()
         self.cipher = Fernet(self.encryption_key)
         
@@ -146,10 +147,11 @@ class ClinicalDeidentifier:
         """Decrypts a previously encrypted sensitive data token."""
         return self.cipher.decrypt(encrypted_value.encode('utf-8')).decode('utf-8')
 
-    def anonymize_patient_record(self, raw_record: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]]:
+    def anonymize_patient_record(self, raw_record: Dict[str, Any]) -> Dict[str, Any]:
         """
         Removes direct HIPAA identifiers and tokenizes patient IDs (USUBJID)
         prior to transmitting payloads to external LLM endpoints.
+        Note: The token mappings are maintained internally on the instance.
         """
         anonymized = raw_record.copy()
         
@@ -372,7 +374,7 @@ To evaluate and validate the biotechnology orchestration pipelines, the followin
 FDA 21 CFR Part 11 requires immutable audit trails, system validations, and electronic signatures. This platform achieves compliance through:
 - **Append-Only Ledger Store**: Leveraging LangGraph checkpointers configured over an immutable, append-only PostgreSQL database to permanently record every state transition, tool execution, and prompt hash.
 - **Cryptographic Prompt Registry**: Version-controlling prompt templates in Git, locking them with SHA-256 hashes, and auditing prompt-to-model assignments.
-- **Biometric Signature Gateway**: Injecting mandatory Human-in-the-Loop nodes for data writing operations. Final approvals require verified investigator authentication signatures via an OAuth2 gateway.
+- **Electronic Signature Gateway**: Injecting mandatory Human-in-the-Loop nodes for data writing operations. Final approvals require verified investigator authentication signatures via an OAuth2 gateway.
 
 ### 2. HIPAA Compliance and Zero-Retention Protocols
 To protect Protected Health Information (PHI) and clinical patient privacy:
