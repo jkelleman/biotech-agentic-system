@@ -3,8 +3,7 @@ from typing import Iterator, Dict, Any, Generator
 
 class CDISCChunkParser:
     """
-    Parser for clinical trial datasets (SAS XPT, CSV) that streams chunks iteratively
-    to prevent Out-Of-Memory (OOM) errors in high-throughput pipelines.
+    CSV parser that yields records in chunks to limit memory use for larger files.
     """
     def __init__(self, chunk_size: int = 500):
         self.chunk_size = chunk_size

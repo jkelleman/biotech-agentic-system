@@ -6,11 +6,10 @@ logger = logging.getLogger("AegisCSR.extractor")
 
 def extract_and_code_data(state: AgentState) -> Dict[str, Any]:
     """
-    Node A: Data Extraction & MedDRA Coding Agent.
-    Inspects raw patient databases, extracts demographic metrics, and cross-references
-    unstructured adverse events with standardized MedDRA classification mappings.
+    Extracts selected fields and applies simple keyword-based term mappings.
+    The mappings are illustrative and are not official MedDRA coding.
     """
-    logger.info("Executing Data Extraction & MedDRA Coding Node")
+    logger.info("Executing deterministic extraction and term mapping")
     raw_data = state.get("raw_data", {})
     subject_id = raw_data.get("subject_id", "SUBJ-UNKNOWN")
     
@@ -47,7 +46,7 @@ def extract_and_code_data(state: AgentState) -> Dict[str, Any]:
     if bili_max >= 2.0:
         coded_terms.append(f"Investigations: Blood bilirubin increased ({bili_max}x ULN)")
         
-    logger.info(f"Coded Terms for Subject {subject_id}: {coded_terms}")
+    logger.info(f"Illustrative mapped terms for subject {subject_id}: {coded_terms}")
     
     return {
         "coded_terms": coded_terms

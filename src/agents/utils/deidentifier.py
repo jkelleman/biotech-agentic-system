@@ -4,12 +4,13 @@ from cryptography.fernet import Fernet
 
 class ClinicalDeidentifier:
     """
-    Symmetric-key cryptographic scrubber that anonymizes Protected Health Information (PHI)
-    on the client side before clinical payloads are transmitted to an external LLM provider.
-    Ensures full HIPAA compliance and permits re-identification locally when reports are finalized.
+    Demonstration helper for limited field removal, regex redaction, and subject-ID tokenization.
+
+    This is not a comprehensive de-identification method and does not establish regulatory
+    compliance. Its key and token mapping exist only for the lifetime of this instance.
     """
     def __init__(self):
-        # Generate or load a symmetric encryption key. In production, this would be fetched from AWS KMS.
+        # Generate a temporary key for this demonstration instance.
         self.encryption_key = Fernet.generate_key()
         self.cipher = Fernet(self.encryption_key)
         
@@ -27,7 +28,7 @@ class ClinicalDeidentifier:
 
     def anonymize_patient_record(self, raw_record: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Removes direct HIPAA identifiers (names, SSNs) and pseudo-anonymizes the patient subject ID (USUBJID).
+        Removes selected fields and replaces the subject ID with a temporary token.
         """
         anonymized = raw_record.copy()
         

@@ -1,5 +1,5 @@
 # AegisCSR Agentic System Configuration
-# Production-ready settings for Clinical Study Report & Safety Narrative Automation
+# Illustrative settings; the current demo does not load this file.
 
 project:
   name: "AegisCSR"
@@ -28,7 +28,7 @@ evaluations:
   observability_provider: "LangSmith"
 
 security:
-  encryption_algorithm: "AES-256 (Fernet)"
+  encryption_algorithm: "Fernet"
   strip_pii: true
   enable_hitl: true
   hitl_required_roles:
