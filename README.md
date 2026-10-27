@@ -4,7 +4,9 @@
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB)
 ![Project status: prototype](https://img.shields.io/badge/status-prototype-informational)
 
-AegisCSR is a small Python prototype for drafting a clinical safety narrative from a structured patient record. It demonstrates a local workflow with deterministic extraction, narrative generation, quality checks, and reversible subject-ID tokenization. It is intended for software development and demonstration, not for clinical use.
+> **TL;DR:** Fictional trial data in. A safety-narrative draft out. Local, deterministic, and LLM-free.
+
+AegisCSR is a local Python prototype that turns a structured clinical-trial record into an illustrative safety-narrative draft using deterministic extraction, template-based writing, basic quality checks, and limited reversible subject-ID tokenization. It uses no LLM or external clinical data and is for development and demonstration—not clinical use.
 
 ## What the prototype does
 
