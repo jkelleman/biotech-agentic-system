@@ -1,5 +1,9 @@
 # AegisCSR
 
+![CI](https://github.com/jkelleman/biotech-agentic-system/actions/workflows/tests.yml/badge.svg)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB)
+![Project status: prototype](https://img.shields.io/badge/status-prototype-informational)
+
 AegisCSR is a small Python prototype for drafting a clinical safety narrative from a structured patient record. It demonstrates a local workflow with deterministic extraction, narrative generation, quality checks, and reversible subject-ID tokenization. It is intended for software development and demonstration, not for clinical use.
 
 ## What the prototype does
