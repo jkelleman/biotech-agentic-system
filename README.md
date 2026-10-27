@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="banner.svg" alt="Biotech Agentic System Banner" style="width:100%">
+</p>
+
 # AegisCSR
 
 **Deterministic Clinical Safety Narratives—Local Pipeline, Fast, and LLM-Free.**
@@ -43,7 +47,7 @@ PYTHONPATH=. python src/main.py
 PYTHONPATH=. python -m unittest discover -s tests -v
 ```
 
-## 📂 Repository Blueprint
+## Repository Blueprint
 
 * `src/main.py` - The main entry point running the illustrative workflow.
 * `src/agents/` - Deterministic pipeline nodes, execution logic, and state management.
