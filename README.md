@@ -1,12 +1,55 @@
 # AegisCSR
 
+**Deterministic Clinical Safety Narratives—Local Pipeline, Fast, and LLM-Free.**
+
+AegisCSR is a local Python prototype that transforms raw clinical trial records into clean, structured safety narrative drafts. By utilizing a deterministic multi-agent pipeline instead of external LLM calls, this framework keeps data entirely in-memory, deterministic, and under your control.
 ![CI](https://github.com/jkelleman/biotech-agentic-system/actions/workflows/tests.yml/badge.svg)
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB)
 ![Project status: prototype](https://img.shields.io/badge/status-prototype-informational)
 
-> **TL;DR:** Fictional trial data in. A safety-narrative draft out. Local, deterministic, and LLM-free.
+> **TL;DR:** Add trial data in. A safety-narrative draft out. Local, deterministic, and LLM-free.
 
-AegisCSR is a local Python prototype that turns a structured clinical-trial record into an illustrative safety-narrative draft using deterministic extraction, template-based writing, basic quality checks, and limited reversible subject-ID tokenization. It uses no LLM or external clinical data and is for development and demonstration—not clinical use.
+## What It Does
+
+The core pipeline processes a patient record through a highly coordinated, multi-step workflow:
+
+* **Smart Redaction:** Scrubs selected identifier fields, emails, and phone numbers directly from clinical notes.
+* **Reversible Tokenization:** Swaps the sensitive subject ID with a temporary token for secure local processing, restoring it only at the final output stage.
+* **Targeted Extraction:** Isolates specific adverse events and laboratory anomalies using keyword lists and precise numerical threshold rules.
+* **Automated Drafting:** Assembles a template-based safety narrative and performs automatic quality checks to catch missing data elements before completion.
+
+## Architecture & Dual-Execution Engine
+
+This system uses a modular, state-driven design to coordinate tasks. It features a flexible runtime setup:
+* **Graph Mode:** Coordinates discrete tasks as agents using a LangGraph workflow.
+* **Fallback Mode:** Executes the exact same deterministic pipeline using a standard Python loop if LangGraph isn't installed in the environment.
+
+## Quick Start
+
+Get the prototype running locally in seconds. Requires Python 3.10 or later.
+
+```bash
+# Set up a virtual environment
+python -m venv .venv
+source .venv/bin/activate
+
+# Install requirements
+python -m pip install -r requirements.txt
+
+# Run the illustrative demo pipeline
+PYTHONPATH=. python src/main.py
+
+# Run the test suite
+PYTHONPATH=. python -m unittest discover -s tests -v
+```
+
+## 📂 Repository Blueprint
+
+* `src/main.py` - The main entry point running the illustrative workflow.
+* `src/agents/` - Deterministic pipeline nodes, execution logic, and state management.
+* `src/agents/utils/` - Local CSV parsers and string-matching de-identification engines.
+* `config/` - YAML configuration profiles for managing workflow parameters.
+* `docs/` - System architecture blueprints, security boundaries, and validation notes.
 
 ## What the prototype does
 
