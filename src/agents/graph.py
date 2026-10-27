@@ -20,20 +20,20 @@ def route_after_qc(state: AgentState) -> str:
     """
     Conditional routing edge. Resolves which node the state should proceed to next.
     - Prevents runaway costs and infinite loops via loop limits.
-    - Forces human intervention if too many revision loops fail.
+    - Stops after the configured revision limit without marking the draft approved.
     - Routes back to medical writer for editing if compliance score is low.
     - Approves and ends if score is >= 0.90.
     """
     loop_count = state.get("loop_count", 0)
     compliance_score = state.get("compliance_score", 0.0)
     
-    # 5 is our max loop count limit
+    # 5 is the maximum number of writer passes.
     if loop_count >= 5:
-        logger.warning(f"Loop count exceeded ({loop_count}). Routing to Force Human Intervention / END.")
-        return "force_human_intervention"
+        logger.warning(f"Maximum revision count reached ({loop_count}); ending without approval.")
+        return "max_revisions_reached"
         
     if compliance_score >= 0.90:
-        logger.info(f"Target Compliance Threshold met ({compliance_score:.2f} >= 0.90). Approving Draft.")
+        logger.info(f"QC threshold met ({compliance_score:.2f} >= 0.90). Ending workflow.")
         return "approve"
         
     logger.info(f"Compliance Score ({compliance_score:.2f} < 0.90). Routing back to writer for revision.")
@@ -74,7 +74,7 @@ class AegisStateGraphOrchestrator:
                 {
                     "approve": END,
                     "rewrite": "writer",
-                    "force_human_intervention": END
+                    "max_revisions_reached": END
                 }
             )
             
@@ -120,9 +120,9 @@ class AegisStateGraphOrchestrator:
             if next_step == "approve":
                 state["is_approved"] = True
                 break
-            elif next_step == "force_human_intervention":
+            elif next_step == "max_revisions_reached":
                 state["is_approved"] = False
-                state["errors"].append("SYSTEM_HALT: Maximum revision loop threshold exceeded.")
+                state["errors"].append("SYSTEM_HALT: Maximum revision count reached; review is required.")
                 break
             # Else, next_step == "rewrite", state loops back to writer node automatically
             

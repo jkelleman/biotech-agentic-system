@@ -6,9 +6,8 @@ logger = logging.getLogger("AegisCSR.writer")
 
 def write_medical_narrative(state: AgentState) -> Dict[str, Any]:
     """
-    Node B: Medical Writer Agent.
-    Ingests structured variables, lab reports, and coded taxonomies to draft
-    a rigorous, ICH E3-compliant patient safety narrative.
+    Builds a template-based draft from the fields and terms in the workflow state.
+    The output is illustrative and is not an ICH E3-compliant clinical report.
     """
     logger.info("Executing Medical Writer Node")
     raw_data = state.get("raw_data", {})
@@ -31,7 +30,7 @@ def write_medical_narrative(state: AgentState) -> Dict[str, Any]:
         f"The subject was randomized to the **{treatment_arm}** treatment group."
     )
     
-    narrative_sections.append("## Standardized Adverse Events (MedDRA Coded)")
+    narrative_sections.append("## Extracted Events and Illustrative Terms")
     if coded_terms:
         event_list = "\n".join([f"- {term}" for term in coded_terms])
         narrative_sections.append(event_list)
