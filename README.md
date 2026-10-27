@@ -28,6 +28,12 @@ The workflow's `is_approved` flag records whether its automated QC threshold was
 
 Business impact, regulatory compliance, and clinical accuracy have not been independently measured. The included checks are examples, not evidence that generated text is safe or fit for submission.
 
+## Who might find this useful?
+
+If your team is exploring clinical-trial safety workflows, pharmacovigilance, or draft safety-narrative automation, this prototype may offer a small, transparent starting point. That could be relevant to biopharma organizations such as Pfizer, Roche, Novartis, AstraZeneca, Merck, Amgen, Gilead Sciences, Moderna, and Regeneron, as well as clinical research organizations such as IQVIA, ICON, Parexel, Fortrea, and Labcorp.
+
+These are examples of organizations in the broader life-sciences space—not customers, users, or endorsers of this project. The prototype is not validated or suitable for production or clinical use; see [Project status and limitations](#project-status-and-limitations).
+
 ## Quick start
 
 Requires Python 3.10 or later.
