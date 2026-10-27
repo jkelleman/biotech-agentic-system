@@ -18,7 +18,7 @@ def run_pipeline_demo():
     deidentifier = ClinicalDeidentifier()
     
     # 2. Build mock raw clinical data representing our metabolic liver trial scenario
-    # Contains sensitive direct HIPAA identifiers (SSN, Name, Phone, Email)
+    # Fictional values that resemble direct identifiers for the local demo.
     raw_patient_payload = {
         "subject_id": "USUBJID-THR902-142",
         "patient_name": "Leonard Vance",
@@ -46,9 +46,9 @@ def run_pipeline_demo():
     
     # 3. Client-Side Anonymization: Stripping PHI before outbound transmission
     safe_patient_payload = deidentifier.anonymize_patient_record(raw_patient_payload)
-    logger.info("Outbound Client-Side Anonymization completed.")
-    logger.info(f"Anonymized Record Subject Token: {safe_patient_payload['subject_id']}")
-    logger.info(f"Verify PII removal: 'patient_name' in payload = {'patient_name' in safe_patient_payload}")
+    logger.info("Limited demo tokenization and redaction completed.")
+    logger.info(f"Tokenized subject ID: {safe_patient_payload['subject_id']}")
+    logger.info(f"Selected field removed: 'patient_name' in payload = {'patient_name' in safe_patient_payload}")
     
     # 4. Construct initial state for the LangGraph orchestrator
     initial_state: AgentState = {
@@ -67,7 +67,7 @@ def run_pipeline_demo():
     
     # 6. Retrieve safe de-identified draft narrative (The text returned from cloud LLM gateway)
     safe_draft_text = final_state.get("draft_narrative", "")
-    logger.info("========== SAFE DE-IDENTIFIED OUTBOUND TEXT ==========")
+    logger.info("========== TOKENIZED DEMO DRAFT ==========")
     print(safe_draft_text)
     logger.info("=======================================================")
     
@@ -77,8 +77,8 @@ def run_pipeline_demo():
     print(final_restored_narrative)
     logger.info("===========================================================")
     
-    logger.info(f"Pipeline Completed. Approved Status: {final_state['is_approved']}")
-    logger.info(f"Final QC Compliance Auditor Score: {final_state['compliance_score']:.2f}")
+    logger.info(f"Pipeline completed. Automated QC threshold met: {final_state['is_approved']}")
+    logger.info(f"Final illustrative QC score: {final_state['compliance_score']:.2f}")
 
 if __name__ == "__main__":
     run_pipeline_demo()
