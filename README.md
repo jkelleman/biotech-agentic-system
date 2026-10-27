@@ -151,7 +151,7 @@ class ClinicalDeidentifier:
     def anonymize_patient_record(self, raw_record: Dict[str, Any]) -> Dict[str, Any]:
         """
         Removes `patient_name` and `ssn` fields, tokenizes `subject_id` to an opaque
-        random token (SUBJ-ANON-<hex>), and redacts email addresses and phone numbers
+        random numeric token (SUBJ-ANON-<digits>), and redacts email addresses and phone numbers
         from `clinical_notes` using regular expressions. Token-to-encrypted-ID mappings
         are maintained internally on the instance for subsequent re-identification.
         """
@@ -167,7 +167,7 @@ class ClinicalDeidentifier:
         raw_id = str(anonymized.get("subject_id", ""))
         if raw_id:
             if raw_id not in self._token_registry:
-                token = f"SUBJ-ANON-{secrets.token_hex(8)}"
+                token = f"SUBJ-ANON-{secrets.randbelow(10**20):020d}"
                 encrypted_raw_id = self._encrypt_value(raw_id)
                 
                 # Store mapping securely within secure infrastructure boundaries
@@ -188,7 +188,7 @@ class ClinicalDeidentifier:
     def reidentify_narrative(self, llm_output_text: str) -> str:
         """Re-injects true patient identities into local text files post-generation."""
         reidentified_text = llm_output_text
-        tokens_found = re.findall(r'SUBJ-ANON-[0-9a-f]+', reidentified_text)
+        tokens_found = re.findall(r'SUBJ-ANON-\d+', reidentified_text)
         
         for token in tokens_found:
             if token in self._reverse_registry:
