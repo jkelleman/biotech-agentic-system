@@ -17,9 +17,9 @@ AegisCSR is a local Python prototype that transforms raw clinical trial records 
 
 The core pipeline processes a patient record through a highly coordinated, multi-step workflow:
 
-* **Smart Redaction:** Scrubs selected identifier fields, emails, and phone numbers directly from clinical notes.
+* **Selected-Identifier Redaction:** Removes configured identifier fields recursively and scrubs their known values, emails, and supported phone/SSN formats from text.
 * **Reversible Tokenization:** Swaps the sensitive subject ID with a temporary token for secure local processing, restoring it only at the final output stage.
-* **Targeted Extraction:** Isolates specific adverse events and laboratory anomalies using keyword lists and precise numerical threshold rules.
+* **Targeted Extraction:** Applies whole-term, negation-aware note rules and validated ALT, AST, and bilirubin thresholds.
 * **Automated Drafting:** Assembles a template-based safety narrative and performs automatic quality checks to catch missing data elements before completion.
 
 ## Architecture & Dual-Execution Engine
@@ -27,6 +27,8 @@ The core pipeline processes a patient record through a highly coordinated, multi
 This system uses a modular, state-driven design to coordinate tasks. It features a flexible runtime setup:
 * **Graph Mode:** Coordinates discrete tasks as agents using a LangGraph workflow.
 * **Fallback Mode:** Executes the exact same deterministic pipeline using a standard Python loop if LangGraph isn't installed in the environment.
+
+Both engines use the same validated state, node wrappers, router, revision limit, and terminal finalizer. Execution errors fail explicitly; an installed but broken graph never silently falls back or replays a record. Automatic QC approval requires both a passing score and no unresolved findings.
 
 ## Quick Start
 
@@ -40,6 +42,9 @@ source .venv/bin/activate
 # Install requirements
 python -m pip install -r requirements.txt
 
+# Optional graph execution (not required for the native engine)
+python -m pip install -r requirements-langgraph.txt
+
 # Run the illustrative demo pipeline
 PYTHONPATH=. python src/main.py
 
@@ -52,7 +57,7 @@ PYTHONPATH=. python -m unittest discover -s tests -v
 * `src/main.py` - The main entry point running the illustrative workflow.
 * `src/agents/` - Deterministic pipeline nodes, execution logic, and state management.
 * `src/agents/utils/` - Local CSV parsers and string-matching de-identification engines.
-* `config/` - YAML configuration profiles for managing workflow parameters.
+* `src/runtime/` - Validated local runtime settings, loaded by the demo from `config/runtime.json`.
 * `docs/` - System architecture blueprints, security boundaries, and validation notes.
 
 ## What the prototype does
@@ -67,9 +72,53 @@ The demo in `src/main.py` runs a hard-coded illustrative case through these step
 
 The workflow uses LangGraph if it is installed; otherwise, it runs using a built-in Python loop. It does not call an LLM or load external clinical data.
 
+For application integration, use the per-record privacy gateway:
+
+```python
+from src.agents.graph import AegisStateGraphOrchestrator
+from src.runtime.config import RuntimeConfig
+
+pipeline = AegisStateGraphOrchestrator(RuntimeConfig(engine="native"))
+result = pipeline.run_record({
+    "subject_id": "DEMO-001",
+    "clinical_notes": "Patient denies nausea but reports vomiting.",
+    "labs": {"alt_peak_uln": "3.0"},
+})
+authorized_local_output = result["output_narrative"]
+```
+
+`output_narrative` contains the restored subject ID and is sensitive. The draft and record in the returned state remain tokenized. The lower-level `execute({"raw_data": ...})` API requires caller-de-identified input and never restores identifiers. Each `run_record` call owns a fresh in-memory vault, cleared on success or failure; random tokens intentionally differ across runs, while clinical decisions and transitions remain deterministic.
+
+The CSV parser streams string-valued rows, preserving leading-zero IDs and missing values. Malformed files and missing required headers fail explicitly; CSV ingestion does not infer a clinical record or join domains.
+
+For air-gapped deployment, pre-stage approved dependency wheels and install with `pip --no-index --find-links=/approved/wheels -r requirements.txt` (or the optional graph requirements). No network connection is needed at runtime. LangSmith tracing is explicitly disabled during graph execution, including inherited tracing settings. Keep sensitive output out of logging, tracing, and external middleware.
+
+## Synthetic clinical workloads and benchmarks
+
+`src/utils/mock_generator.py` provides lazy, seeded synthetic records and independent clinical ground truth. Fixtures cycle through negated/affirmed events, below/at/above-threshold ALT/AST/bilirubin values, leading-zero ID components, nested identifiers, varied phones/extensions, emails, DOB, SSN, and MRN embedded in notes and event descriptions. They use fictional names, reserved `.invalid` email domains, `555-01xx` phone numbers, and invalid `000` SSNs; no real patient data is loaded.
+
+```python
+from src.utils.mock_generator import generate_clinical_records
+
+for record in generate_clinical_records(10_000, seed=42, note_repetitions=8):
+    result = pipeline.run_record(record)
+```
+
+Compare both engines after installing `requirements-langgraph.txt`:
+
+```bash
+python -m tests.benchmark --records 2000 --repeats 3 --note-repetitions 4
+# Native-only deployments can benchmark without optional graph dependencies:
+python -m tests.benchmark --engine native --records 2000
+# Optional hardware-specific acceptance budgets (nonzero exit on failure):
+python -m tests.benchmark --records 2000 --max-latency-ratio 10 --max-memory-ratio 10
+```
+
+Each engine runs in a fresh interpreter with identical seeded data and warm-up. The terminal summary reports mean/P50/P95 latency, records per second, peak traced Python allocations, and engine deltas. Latency excludes startup, generation, validation assertions, and memory instrumentation. A separate streamed memory pass includes data generation and does not measure total process RSS or native-library allocations. Every timed result is checked against independent clinical and redaction expectations; token-normalized complete-state digests must match across engines. Random security tokens are deliberately not seeded. No universal speed guarantee is implied; configure budgets on representative deployment hardware.
+
 ## Project status and limitations
 
-This repository is a local prototype, not a validated or production-ready clinical system. The agents are deterministic Python functions; MedDRA coding, narrative review, human approval, electronic signatures, audit logging, and external model integrations are not implemented. The de-identification example is limited and does not establish HIPAA compliance or guarantee that a record is de-identified. Do not use real patient information.
+This repository is a hardened local reference implementation, not a validated or production-ready clinical system. The agents are deterministic Python functions; licensed MedDRA coding, clinical narrative review, human approval, electronic signatures, and persistent audit logging are not implemented. Selected-identifier redaction is not a complete HIPAA Safe Harbor method and does not guarantee that a record is de-identified. Dates, geography, biometrics, contextual identity, and unsupported international phone formats require additional controls and validation. Do not use real patient information.
 
 The workflow's `is_approved` flag records whether its automated QC threshold was met; it does not represent human approval.
 
@@ -118,13 +167,17 @@ This export is only a starting point; it does not make the dataset directly usab
 ## Repository layout
 
 ```text
-config/agent_config.yaml        Example workflow configuration
+config/runtime.json             Local engine, revision limit, and QC threshold
 docs/                           Scope, architecture, security, and evaluation notes
 src/main.py                     Local demonstration entry point
 src/agents/                     Workflow state, graph, and deterministic nodes
-src/agents/utils/               CSV parser and illustrative de-identification helper
+src/agents/utils/               Streaming CSV, redaction/token vault, clinical rules
+src/runtime/                    Immutable validated runtime configuration
+src/utils/mock_generator.py     Streaming seeded synthetic clinical fixtures
 tests/                           Unit and workflow tests
+tests/benchmark.py              Isolated latency, throughput, memory, and parity checks
 requirements.txt                Python runtime dependencies
+requirements-langgraph.txt      Optional LangGraph runtime dependencies
 ```
 
 ## Documentation
