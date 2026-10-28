@@ -19,6 +19,7 @@ def lab_value(value: object) -> float:
 
 LAB_RULES: Tuple[Tuple[str, float, str], ...] = (
     ("alt_peak_uln", 3.0, "Alanine aminotransferase increased"),
+    ("ast_peak_uln", 3.0, "Aspartate aminotransferase increased"),
     ("bili_peak_uln", 2.0, "Blood bilirubin increased"),
 )
 
@@ -29,13 +30,13 @@ def laboratory_terms(labs: Mapping[str, object]) -> List[str]:
         if field in labs:
             value = lab_value(labs[field])
             if value >= threshold:
-                terms.append(f"Investigations: {label} ({value:g}x ULN)")
+                terms.append(f"Investigations: {label} ({value}x ULN)")
     return terms
 
 
 _RULES = (
     ("gallbladder", "Gastrointestinal disorders: Gallbladder-related event"),
-    ("acute cholecystitis", "Gastrointestinal disorders: Cholecystitis Acute"),
+    ("acute cholecystitis", "Gastrointestinal disorders: Cholecystitis"),
     ("cholecystitis", "Gastrointestinal disorders: Cholecystitis"),
     ("liver", "Hepatobiliary disorders: Liver-related event"),
     ("liver enzymes", "Hepatobiliary disorders: Liver-related event"),

@@ -14,7 +14,7 @@ def validate_record(record: object) -> Dict[str, Any]:
         raise ValueError("subject_id must be a non-empty string.")
     age = record.get("age")
     if "age" in record and (
-        type(age) is not int or not 0 <= age <= 130
+        (type(age) is not int or not 0 <= age <= 130) and age != "90+"
     ):
         raise ValueError("age must be an integer in [0, 130].")
     for field in ("sex", "treatment_arm"):
@@ -27,7 +27,7 @@ def validate_record(record: object) -> Dict[str, Any]:
     labs = record.get("labs", {})
     if not isinstance(labs, dict):
         raise ValueError("labs must be an object.")
-    for field in ("alt_peak_uln", "bili_peak_uln"):
+    for field in ("alt_peak_uln", "ast_peak_uln", "bili_peak_uln"):
         if field in labs:
             lab_value(labs[field])
     events = record.get("adverse_events", [])
@@ -43,7 +43,7 @@ def validate_record(record: object) -> Dict[str, Any]:
         if "onset_day" in event and type(event["onset_day"]) is not int:
             raise ValueError("Event onset_day must be an integer.")
     validated = deepcopy(record)
-    for field in ("alt_peak_uln", "bili_peak_uln"):
+    for field in ("alt_peak_uln", "ast_peak_uln", "bili_peak_uln"):
         if field in labs:
             validated["labs"][field] = lab_value(labs[field])
     return validated

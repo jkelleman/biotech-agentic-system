@@ -24,6 +24,25 @@ complete returned state exactly. Production tokens remain random. Socket
 connection attempts are rejected in the offline test even with ambient tracing
 enabled.
 
+## Reproducible synthetic performance evaluation
+
+`src/utils/mock_generator.py` streams fictional records with independent expected
+findings. Count, seed, and note repetition are configurable; fixtures vary contact
+formats, nested identifiers, event descriptions, negations, and laboratory
+boundaries. These engineering fixtures are not a validated clinical reference
+corpus.
+
+Run `python -m tests.benchmark --records 2000 --repeats 3 --note-repetitions 4`.
+The default comparison requires the optional LangGraph dependencies;
+`--engine native` works with base dependencies. Each engine runs in a fresh worker
+interpreter after equal warm-up. The report includes latency, throughput, memory
+allocation, and parity metrics without record contents. CI runs a small benchmark
+smoke check; use representative hardware and workloads for capacity decisions.
+
+The benchmark validates records against an independent clinical oracle and
+compares complete results after normalizing only random subject tokens. Reported
+Python allocation peaks do not include total RSS or native-library allocations.
+
 ## Limits
 
 QC scores are penalty-based software checks, not clinical quality or compliance

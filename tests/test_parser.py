@@ -61,3 +61,10 @@ class TestClinicalCSV(unittest.TestCase):
         self.assertEqual(next(records), {"subject_id": "001"})
         with self.assertRaises(ClinicalCSVError):
             next(records)
+
+    def test_stream_chunks_respects_chunk_size(self):
+        path = self.write("subject_id\n001\n002\n")
+        self.assertEqual(
+            list(self.parser.stream_chunks(path)),
+            [[{"subject_id": "001"}], [{"subject_id": "002"}]],
+        )

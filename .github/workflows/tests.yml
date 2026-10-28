@@ -29,3 +29,10 @@ jobs:
         run: python -m pip install -r requirements-langgraph.txt
       - name: Run unit tests
         run: PYTHONPATH=. python -m unittest discover -s tests -v
+      - name: Benchmark smoke check
+        run: |
+          if [ "${{ matrix.engine }}" = "langgraph" ]; then
+            python -m tests.benchmark --records 10 --repeats 1 --warmup 1
+          else
+            python -m tests.benchmark --engine native --records 10 --repeats 1 --warmup 1
+          fi

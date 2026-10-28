@@ -1,12 +1,16 @@
 """Strict, constant-row-memory CSV ingestion preserving clinical identifiers."""
 
 import csv
+from itertools import islice
 from pathlib import Path
 from typing import Dict, Iterator, List, Sequence, Union
 
 
 class ClinicalCSVError(ValueError):
     """Malformed clinical CSV; messages never include source row values."""
+
+
+CSVValidationError = ClinicalCSVError
 
 
 class CDISCChunkParser:
@@ -38,11 +42,22 @@ class CDISCChunkParser:
                 for row in reader:
                     if len(row) != len(headers):
                         raise ClinicalCSVError(f"CSV column count mismatch at line {reader.line_num}.")
-                    yield dict(zip(headers, row))
+                    record = dict(zip(headers, row))
+                    if "subject_id" in record and not record["subject_id"].strip():
+                        raise ClinicalCSVError(f"Missing subject_id at line {reader.line_num}.")
+                    yield record
             except csv.Error:
                 raise ClinicalCSVError(f"Malformed CSV near line {reader.line_num}.") from None
             except UnicodeError:
                 raise ClinicalCSVError("CSV must be UTF-8 encoded.") from None
+
+    def stream_chunks(self, file_path: Union[str, Path]) -> Iterator[List[Dict[str, str]]]:
+        records = self.stream_csv(file_path)
+        try:
+            while chunk := list(islice(records, self.chunk_size)):
+                yield chunk
+        finally:
+            records.close()
 
     def iter_subject_records(self, file_path: Union[str, Path], subject_id: str) -> Iterator[Dict[str, str]]:
         if not isinstance(subject_id, str) or not subject_id:

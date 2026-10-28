@@ -1,6 +1,14 @@
+<p align="center">
+  <img src="banner.svg" alt="Biotech Agentic System Banner" style="width:100%">
+</p>
+
 # AegisCSR
 
 **Deterministic clinical safety narrative drafts, local and LLM-free.**
+
+![CI](https://github.com/jkelleman/health-biometrics-biotech-agentic-system/actions/workflows/tests.yml/badge.svg)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB)
+![Project status: prototype](https://img.shields.io/badge/status-prototype-informational)
 
 AegisCSR transforms structured clinical records and selected note findings into
 source-grounded narrative drafts. Both execution engines use the same typed state,
