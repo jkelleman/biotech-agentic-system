@@ -1,71 +1,30 @@
-import logging
-from typing import Dict, Any
-from src.agents.state import AgentState
+"""Source-grounded drafting without inferred diagnoses or trial details."""
 
-logger = logging.getLogger("AegisCSR.writer")
+from src.agents.state import AgentState, NodeUpdate
 
-def write_medical_narrative(state: AgentState) -> Dict[str, Any]:
-    """
-    Builds a template-based draft from the fields and terms in the workflow state.
-    The output is illustrative and is not an ICH E3-compliant clinical report.
-    """
-    logger.info("Executing Medical Writer Node")
-    raw_data = state.get("raw_data", {})
-    coded_terms = state.get("coded_terms", [])
-    errors = state.get("errors", [])
-    
-    # Extraction
-    subject_id = raw_data.get("subject_id", "SUBJ-UNKNOWN")
-    age = raw_data.get("age", "Unknown")
-    sex = raw_data.get("sex", "Unknown")
-    treatment_arm = raw_data.get("treatment_arm", "Placebo")
-    
-    # Compose Narrative
-    narrative_sections = []
-    narrative_sections.append(f"# Patient Safety Narrative: Subject {subject_id}")
-    narrative_sections.append(f"## Demographics and Cohort Placement")
-    narrative_sections.append(
-        f"Subject {subject_id} is a {age}-year-old {sex} patient enrolled in the Phase IIb "
-        f"THR-902 trial for Metabolic Dysfunction-Associated Steatohepatitis (MASH). "
-        f"The subject was randomized to the **{treatment_arm}** treatment group."
+
+def write_medical_narrative(state: AgentState) -> NodeUpdate:
+    record = state["raw_data"]
+    sections = [f"# Patient Safety Narrative: Subject {record['subject_id']}"]
+    sections.append("## Demographics and Cohort Placement")
+    for field, label in (("age", "Age"), ("sex", "Sex"), ("treatment_arm", "Treatment arm")):
+        sections.append(f"{label}: {record.get(field, 'Not reported')}")
+    sections.append("## Extracted Events and Illustrative Terms")
+    sections.append(
+        "\n".join(f"- {term}" for term in state["coded_terms"])
+        or "No affirmative findings identified by the configured rules."
     )
-    
-    narrative_sections.append("## Extracted Events and Illustrative Terms")
-    if coded_terms:
-        event_list = "\n".join([f"- {term}" for term in coded_terms])
-        narrative_sections.append(event_list)
-    else:
-        narrative_sections.append("No adverse events recorded.")
-        
-    narrative_sections.append("## Chronology of Present Case")
-    # Chronological compilation from raw data events
-    events = raw_data.get("adverse_events", [])
-    if events:
-        for ae in events:
-            desc = ae.get("description", "Adverse Event")
-            onset = ae.get("onset_day", "N/A")
-            severity = ae.get("severity", "Mild")
-            relation = ae.get("relation", "Unrelated")
-            narrative_sections.append(
-                f"On Day {onset}, the patient experienced a {severity.lower()} case of **{desc}**. "
-                f"The clinical investigator rated this event as **{relation.lower()}** to the study drug."
-            )
-    else:
-        narrative_sections.append("No medical anomalies or serious adverse events reported.")
-        
-    # Check for errors from QC and inject remedial corrections
-    if errors:
-        narrative_sections.append("### QC Revision Notes")
-        narrative_sections.append(
-            "Revision applied to resolve data discrepancies identified during compliance check: "
-            f"Resolved - {', '.join(errors)}"
+    sections.append("## Chronology of Present Case")
+    for event in record.get("adverse_events", []):
+        sections.append(
+            f"Recorded event: **{event['description']}**. "
+            f"Onset study day: {event.get('onset_day', 'Not reported')}. "
+            f"Severity: {event.get('severity', 'Not reported')}. "
+            f"Investigator relationship: {event.get('relation', 'Not reported')}."
         )
-        
-    draft_narrative = "\n\n".join(narrative_sections)
-    
-    current_loops = state.get("loop_count", 0)
-    
+    if not record.get("adverse_events"):
+        sections.append("No structured adverse-event entries supplied.")
     return {
-        "draft_narrative": draft_narrative,
-        "loop_count": current_loops + 1
+        "draft_narrative": "\n\n".join(sections),
+        "loop_count": state["loop_count"] + 1,
     }

@@ -1,15 +1,49 @@
-from typing import Dict, Any, List
-from typing_extensions import TypedDict
+"""Typed workflow contracts; raw inputs are validated before execution."""
+
+from typing import List, Literal, Union
+from typing_extensions import NotRequired, TypedDict
+
+
+class AdverseEvent(TypedDict):
+    description: str
+    onset_day: NotRequired[int]
+    severity: NotRequired[str]
+    relation: NotRequired[str]
+
+
+class LaboratoryData(TypedDict, total=False):
+    alt_peak_uln: float
+    bili_peak_uln: float
+
+
+class ClinicalRecord(TypedDict):
+    subject_id: str
+    age: NotRequired[Union[int, Literal["90+"]]]
+    sex: NotRequired[str]
+    treatment_arm: NotRequired[str]
+    clinical_notes: NotRequired[str]
+    labs: NotRequired[LaboratoryData]
+    adverse_events: NotRequired[List[AdverseEvent]]
+
 
 class AgentState(TypedDict):
-    """
-    State definition for the AegisCSR multi-agent clinical trial synthesis platform.
-    Keeps track of raw data, structured taxonomy coding, the drafted text, and QC audits.
-    """
-    raw_data: Dict[str, Any]       # Raw clinical trial data extracted from CDISC (ADSL, ADAE, ADLB)
-    coded_terms: List[str]         # Illustrative terms produced by local keyword rules
-    draft_narrative: str           # The generated clinical study narrative drafted by the Writer Agent
-    compliance_score: float        # The rating assigned by the Compliance Auditor Node (0.0 - 1.0)
-    loop_count: int                # Counter of rewrite/revision iterations to prevent infinite loops
-    errors: List[str]              # Detailed compliance infractions, factual mismatches, or omissions
-    is_approved: bool              # Flag denoting whether the automated QC threshold was met
+    raw_data: ClinicalRecord
+    coded_terms: List[str]
+    draft_narrative: str
+    compliance_score: float
+    loop_count: int
+    errors: List[str]
+    is_approved: bool
+    status: NotRequired[Literal["running", "approved", "review_required"]]
+    node_history: NotRequired[List[str]]
+
+
+class NodeUpdate(TypedDict, total=False):
+    coded_terms: List[str]
+    draft_narrative: str
+    compliance_score: float
+    loop_count: int
+    errors: List[str]
+    is_approved: bool
+    status: Literal["running", "approved", "review_required"]
+    node_history: List[str]

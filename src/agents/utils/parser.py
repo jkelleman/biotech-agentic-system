@@ -1,41 +1,56 @@
-import pandas as pd
-from typing import Iterator, Dict, Any, Generator
+"""Strict, constant-row-memory CSV ingestion preserving clinical identifiers."""
+
+import csv
+from pathlib import Path
+from typing import Dict, Iterator, List, Sequence, Union
+
+
+class ClinicalCSVError(ValueError):
+    """Malformed clinical CSV; messages never include source row values."""
+
 
 class CDISCChunkParser:
+    """Stream strings without numeric/NA coercion or silent row skipping.
+
+    ``chunk_size`` remains a validated compatibility argument. The stdlib reader
+    streams one record at a time; collecting all subject events is opt-in.
     """
-    CSV parser that yields records in chunks to limit memory use for larger files.
-    """
-    def __init__(self, chunk_size: int = 500):
+
+    def __init__(self, chunk_size: int = 500) -> None:
+        if type(chunk_size) is not int or chunk_size < 1:
+            raise ValueError("chunk_size must be a positive integer.")
         self.chunk_size = chunk_size
 
-    def stream_csv(self, file_path: str) -> Generator[Dict[str, Any], None, None]:
-        """
-        Reads a CSV file iteratively in chunks and yields rows as dictionary records.
-        """
-        try:
-            # chunksize returns an iterator over the dataframe blocks
-            iterator = pd.read_csv(file_path, chunksize=self.chunk_size)
-            for chunk in iterator:
-                records = chunk.to_dict(orient="records")
-                for record in records:
-                    yield record
-        except FileNotFoundError:
-            # Fallback for testing/mocking environments
-            yield {}
+    def stream_csv(
+        self, file_path: Union[str, Path], *, required_columns: Sequence[str] = ()
+    ) -> Iterator[Dict[str, str]]:
+        with open(file_path, newline="", encoding="utf-8-sig") as source:
+            reader = csv.reader(source, strict=True)
+            try:
+                headers = next(reader, None)
+                if not headers:
+                    raise ClinicalCSVError("CSV requires a non-empty header.")
+                headers = [header.strip() for header in headers]
+                if any(not header for header in headers) or len(set(headers)) != len(headers):
+                    raise ClinicalCSVError("CSV header names must be non-empty and unique.")
+                if set(required_columns) - set(headers):
+                    raise ClinicalCSVError("CSV is missing required columns.")
+                for row in reader:
+                    if len(row) != len(headers):
+                        raise ClinicalCSVError(f"CSV column count mismatch at line {reader.line_num}.")
+                    yield dict(zip(headers, row))
+            except csv.Error:
+                raise ClinicalCSVError(f"Malformed CSV near line {reader.line_num}.") from None
+            except UnicodeError:
+                raise ClinicalCSVError("CSV must be UTF-8 encoded.") from None
 
-    def fetch_subject_records(self, file_path: str, subject_id: str) -> Dict[str, Any]:
-        """
-        Extracts records specifically related to a given subject ID across chunks.
-        """
-        subject_data = []
-        try:
-            iterator = pd.read_csv(file_path, chunksize=self.chunk_size)
-            for chunk in iterator:
-                # Filter rows in current chunk to keep memory footprint flat
-                filtered_chunk = chunk[chunk['subject_id'] == subject_id]
-                if not filtered_chunk.empty:
-                    subject_data.extend(filtered_chunk.to_dict(orient="records"))
-        except (FileNotFoundError, KeyError):
-            pass
-        
-        return {"subject_id": subject_id, "events": subject_data}
+    def iter_subject_records(self, file_path: Union[str, Path], subject_id: str) -> Iterator[Dict[str, str]]:
+        if not isinstance(subject_id, str) or not subject_id:
+            raise ValueError("subject_id must be a non-empty string.")
+        for record in self.stream_csv(file_path, required_columns=("subject_id",)):
+            if record["subject_id"] == subject_id:
+                yield record
+
+    def fetch_subject_records(self, file_path: Union[str, Path], subject_id: str) -> Dict[str, object]:
+        events: List[Dict[str, str]] = list(self.iter_subject_records(file_path, subject_id))
+        return {"subject_id": subject_id, "events": events}

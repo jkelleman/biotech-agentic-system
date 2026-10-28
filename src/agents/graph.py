@@ -1,129 +1,143 @@
+"""Identical local state transitions for LangGraph and native execution."""
+
 import logging
-from typing import Dict, Any
+from typing import Callable, Dict, Mapping, Optional, cast
 
-from src.agents.state import AgentState
 from src.agents.nodes.extractor import extract_and_code_data
-from src.agents.nodes.writer import write_medical_narrative
 from src.agents.nodes.validator import quality_control_check
-
-logger = logging.getLogger("AegisCSR.graph")
+from src.agents.nodes.writer import write_medical_narrative
+from src.agents.state import AgentState, ClinicalRecord, NodeUpdate
+from src.agents.utils.deidentifier import ClinicalDeidentifier
+from src.agents.utils.validation import validate_record
+from src.runtime import RuntimeConfig
 
 try:
-    from langgraph.graph import StateGraph, END
-    LANGGRAPH_AVAILABLE = True
-except ImportError:
+    from langgraph.graph import END, StateGraph
+except ModuleNotFoundError as exc:
+    if exc.name not in ("langgraph", "langgraph.graph"):
+        raise
     LANGGRAPH_AVAILABLE = False
-    END = "__end__"
+else:
+    LANGGRAPH_AVAILABLE = True
 
-# 1. Routing Logic
-def route_after_qc(state: AgentState) -> str:
-    """
-    Conditional routing edge. Resolves which node the state should proceed to next.
-    - Prevents runaway costs and infinite loops via loop limits.
-    - Stops after the configured revision limit without marking the draft approved.
-    - Routes back to medical writer for editing if compliance score is low.
-    - Approves and ends if score is >= 0.90.
-    """
-    loop_count = state.get("loop_count", 0)
-    compliance_score = state.get("compliance_score", 0.0)
-    
-    # 5 is the maximum number of writer passes.
-    if loop_count >= 5:
-        logger.warning(f"Maximum revision count reached ({loop_count}); ending without approval.")
-        return "max_revisions_reached"
-        
-    if compliance_score >= 0.90:
-        logger.info(f"QC threshold met ({compliance_score:.2f} >= 0.90). Ending workflow.")
+logger = logging.getLogger("AegisCSR.graph")
+Node = Callable[[AgentState], NodeUpdate]
+
+
+class PipelineExecutionError(RuntimeError):
+    """Privacy-safe error boundary; no raw values or original exception attached."""
+
+    def __init__(self, node: str) -> None:
+        self.node = node
+        super().__init__(f"Pipeline failed at node '{node}'; no output released.")
+
+
+def route_after_qc(state: AgentState, config: Optional[RuntimeConfig] = None) -> str:
+    config = config or RuntimeConfig()
+    if state["compliance_score"] >= config.min_compliance_score and not state["errors"]:
         return "approve"
-        
-    logger.info(f"Compliance Score ({compliance_score:.2f} < 0.90). Routing back to writer for revision.")
+    if state["loop_count"] >= config.max_writer_passes:
+        return "max_revisions_reached"
     return "rewrite"
 
 
-# 2. State Machine Compiler
 class AegisStateGraphOrchestrator:
-    """
-    Compiles and executes the AegisCSR Multi-Agent workflow.
-    Utilizes LangGraph when available; provides a native Python fallback State Machine
-    to guarantee local mock-testing compatibility.
-    """
-    def __init__(self):
-        self.langgraph_app = None
-        if LANGGRAPH_AVAILABLE:
-            self._compile_langgraph()
-            
-    def _compile_langgraph(self):
-        """Constructs and compiles the state graph using LangGraph framework."""
-        try:
-            workflow = StateGraph(AgentState)
-            
-            # Register Nodes
-            workflow.add_node("extractor", extract_and_code_data)
-            workflow.add_node("writer", write_medical_narrative)
-            workflow.add_node("qc_checker", quality_control_check)
-            
-            # Register Edges
-            workflow.set_entry_point("extractor")
-            workflow.add_edge("extractor", "writer")
-            workflow.add_edge("writer", "qc_checker")
-            
-            # Add Conditional Edges out of QC checker
-            workflow.add_conditional_edges(
-                "qc_checker",
-                route_after_qc,
-                {
-                    "approve": END,
-                    "rewrite": "writer",
-                    "max_revisions_reached": END
-                }
-            )
-            
-            self.langgraph_app = workflow.compile()
-            logger.info("LangGraph compiled successfully.")
-        except Exception as e:
-            logger.error(f"Error compiling LangGraph: {e}")
-            self.langgraph_app = None
+    """Fresh execution state and token vault per call; never fallback on errors."""
 
-    def execute(self, initial_state: AgentState) -> AgentState:
-        """
-        Runs the state machine. Falls back to pure Python state loop if LangGraph is missing.
-        """
-        if self.langgraph_app:
-            logger.info("Running pipeline via LangGraph Engine")
-            return self.langgraph_app.invoke(initial_state)
-            
-        logger.info("Running pipeline via Native Python State Machine Fallback")
-        state = initial_state.copy()
-        state["loop_count"] = state.get("loop_count", 0)
-        state["errors"] = state.get("errors", [])
-        state["coded_terms"] = state.get("coded_terms", [])
-        state["draft_narrative"] = state.get("draft_narrative", "")
-        state["compliance_score"] = state.get("compliance_score", 0.0)
-        state["is_approved"] = False
-        
-        # Extractor Node
-        ext_res = extract_and_code_data(state)
-        state.update(ext_res)
-        
-        # State Loop
-        while True:
-            # Writer Node
-            writer_res = write_medical_narrative(state)
-            state.update(writer_res)
-            
-            # QC Checker Node
-            qc_res = quality_control_check(state)
-            state.update(qc_res)
-            
-            # Evaluate Router Edge
-            next_step = route_after_qc(state)
-            if next_step == "approve":
-                state["is_approved"] = True
-                break
-            elif next_step == "max_revisions_reached":
-                state["is_approved"] = False
-                state["errors"].append("SYSTEM_HALT: Maximum revision count reached; review is required.")
-                break
-            # Else, next_step == "rewrite", state loops back to writer node automatically
-            
-        return state
+    _EDGES = {"extractor": "writer", "writer": "qc_checker", "finalize": "end"}
+
+    def __init__(self, config: Optional[RuntimeConfig] = None) -> None:
+        self.config = config or RuntimeConfig()
+        if self.config.engine == "langgraph" and not LANGGRAPH_AVAILABLE:
+            raise RuntimeError("LangGraph was explicitly requested but is not installed.")
+        self._nodes: Dict[str, Node] = {
+            "extractor": extract_and_code_data,
+            "writer": write_medical_narrative,
+            "qc_checker": quality_control_check,
+            "finalize": self._finalize,
+        }
+        self.langgraph_app = None
+        if self.config.engine != "native" and LANGGRAPH_AVAILABLE:
+            self._compile_langgraph()
+
+    @staticmethod
+    def _run_node(name: str, node: Node, state: AgentState) -> NodeUpdate:
+        try:
+            update = node(state)
+            update["node_history"] = [*state.get("node_history", []), name]
+            return update
+        except Exception:
+            # Do not log exceptions/tracebacks: upstream messages can contain PHI.
+            logger.error("Pipeline node failed: %s", name)
+        raise PipelineExecutionError(name) from None
+
+    def _finalize(self, state: AgentState) -> NodeUpdate:
+        approved = route_after_qc(state, self.config) == "approve"
+        errors = list(state["errors"])
+        if not approved:
+            errors.append("SYSTEM_HALT: Maximum revision count reached; review is required.")
+        return {
+            "is_approved": approved,
+            "status": "approved" if approved else "review_required",
+            "errors": errors,
+        }
+
+    def _next_node(self, name: str, state: AgentState) -> str:
+        if name == "qc_checker":
+            return "writer" if route_after_qc(state, self.config) == "rewrite" else "finalize"
+        return self._EDGES[name]
+
+    def _compile_langgraph(self) -> None:
+        workflow = StateGraph(AgentState)
+        for name, node in self._nodes.items():
+            workflow.add_node(
+                name,
+                lambda state, name=name, node=node: self._run_node(name, node, state),
+            )
+        workflow.set_entry_point("extractor")
+        for source, target in self._EDGES.items():
+            workflow.add_edge(source, END if target == "end" else target)
+        workflow.add_conditional_edges(
+            "qc_checker",
+            lambda state: self._next_node("qc_checker", state),
+            {"writer": "writer", "finalize": "finalize"},
+        )
+        # No persistence, callbacks, remote models, or external tools.
+        self.langgraph_app = workflow.compile()
+
+    def execute(self, initial_state: Mapping[str, object]) -> AgentState:
+        # Validation and privacy gateway run before either engine sees a record.
+        raw_record = validate_record(initial_state["raw_data"])
+        with ClinicalDeidentifier() as deidentifier:
+            safe_record = cast(ClinicalRecord, deidentifier.anonymize_patient_record(raw_record))
+            state: AgentState = {
+                "raw_data": safe_record,
+                "coded_terms": [],
+                "draft_narrative": "",
+                "compliance_score": 0.0,
+                "loop_count": 0,
+                "errors": [],
+                "is_approved": False,
+                "status": "running",
+                "node_history": ["deidentify"],
+            }
+            if self.langgraph_app is not None:
+                # Disable ambient LangSmith tracing, even if configured by the host.
+                from langsmith import tracing_context
+
+                with tracing_context(enabled=False):
+                    state = self.langgraph_app.invoke(
+                        state,
+                        config={"recursion_limit": 2 * self.config.max_writer_passes + 4},
+                    )
+            else:
+                name = "extractor"
+                while name != "end":
+                    state.update(self._run_node(name, self._nodes[name], state))
+                    name = self._next_node(name, state)
+
+            def output(current: AgentState) -> NodeUpdate:
+                return {"draft_narrative": deidentifier.reidentify_narrative(current["draft_narrative"])}
+
+            state.update(self._run_node("output", output, state))
+            return state

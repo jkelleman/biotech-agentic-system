@@ -1,22 +1,47 @@
 # Evaluation and Observability
 
-## What is evaluated today
+## Automated software checks
 
-The repository includes unit tests for the de-identification example and the workflow. The validator uses deterministic checks for selected fields, adverse-event text, and an ALT mention. Its score is a simple penalty-based value; it is not a clinical quality metric or a calibrated confidence score.
+Run `python -m unittest discover -s tests -v`. CI covers Python 3.10-3.12 with
+both the minimal runtime and optional LangGraph dependencies. LangGraph-specific
+tests explicitly skip when it is absent; native tests always run.
 
-The tests do not establish clinical accuracy, completeness, regulatory compliance, or safety. No LLM evaluation, golden clinical reference set, telemetry backend, or production alerting is configured.
+The suite covers recursive identifier redaction, common contact formats, Unicode
+case variants, non-mutation, random token ownership, concurrent assignment,
+whole-token/non-recursive restoration, foreign-token rejection, and vault cleanup.
+CSV cases cover leading zeros, literal NA, missing values, multiline quoted
+notes, invalid encoding, missing files/columns, malformed rows, and lazy errors.
 
-## Suggested evaluation for future development
+Phenotyping checks include exact inclusive threshold boundaries, invalid and
+non-finite lab values, whole-word matching, negation, post-negated lists,
+uncertainty/history, positive contrast clauses, and order-preserving
+deduplication. No drug-induced liver injury diagnosis is inferred.
 
-Before expanding the prototype, define a representative set of permitted sample records and expected outputs. Evaluate at least:
+Both engines run the same success, remediation, exhaustion, concurrency,
+last-pass approval, input validation, failure sanitization, and no-network
+scenarios. Parity tests use a fixed token generator only inside tests to compare
+complete returned state exactly. Production tokens remain random. Socket
+connection attempts are rejected in the offline test even with ambient tracing
+enabled.
 
-- Whether every stated fact is supported by its source field.
-- Whether required events, lab values, dates, and treatment details are included.
-- Whether incorrect or missing input fields are surfaced rather than silently omitted.
-- Whether revisions improve the draft without introducing unsupported facts.
+## Limits
 
-Keep evaluation data and expected outputs versioned, document their source and usage terms, and require qualified clinical review for any clinical interpretation. Public sample data can support software tests, but should not be treated as evidence of clinical performance.
+QC scores are penalty-based software checks, not clinical quality or compliance
+metrics. Presence checks cannot detect every unsupported claim, contextual
+mismatch, or clinical omission. Conservative clause-level negation can miss
+positive findings in ambiguous lists and complex prose. Tests are not evidence
+of privacy completeness, clinical performance, or fitness for submission.
 
-## Observability
+Before clinical use, establish governed reference datasets, privacy recall and
+precision targets, clinical review, negative controls, and intended-use-specific
+acceptance criteria. Benchmark throughput and memory against representative
+record and note sizes on the actual deployment hardware.
 
-The current application uses Python logging for local execution. It does not send traces or clinical data to LangSmith, Arize Phoenix, or another external service. Any future telemetry integration should be reviewed for privacy, retention, access, and vendor requirements before use.
+## Local observability
+
+Returned state includes node history, revision count, status, score, and
+value-free QC error categories. Failed nodes log only their boundary name.
+No patient identifiers, clinical terms, or exception payloads are logged by
+pipeline nodes. The demo's explicitly identifiable fictional narrative goes to
+stdout, not an external service. No persistent audit trail, production alerting,
+or telemetry backend is implemented.

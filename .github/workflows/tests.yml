@@ -14,6 +14,7 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
+        engine: ["native", "langgraph"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -21,7 +22,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
+      - name: Install local runtime dependencies
         run: python -m pip install -r requirements.txt
+      - name: Install optional graph engine
+        if: matrix.engine == 'langgraph'
+        run: python -m pip install -r requirements-langgraph.txt
       - name: Run unit tests
         run: PYTHONPATH=. python -m unittest discover -s tests -v
