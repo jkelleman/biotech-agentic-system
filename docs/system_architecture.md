@@ -1,41 +1,72 @@
 # System Architecture
 
-## Implemented workflow
-
-The local demo in `src/main.py` constructs one example record and passes it through a small set of deterministic functions:
+## Local execution and responsibility boundaries
 
 ```text
-Example record
-    |
-    v
-ClinicalDeidentifier
-    |
-    v
-extract_and_code_data
-    |
-    v
-write_medical_narrative
-    |
-    v
-quality_control_check
-    |
-    v
-Local output with subject ID restored
+run_record(record)
+  validate input
+  create per-record token vault / recursively redact selected identifiers
+  initialize typed state
+    extractor -> writer -> qc_checker
+                   ^           |
+                   |--rewrite--|
+                               |
+                            finalize
+  restore_output (only output_narrative contains the original subject ID)
+  close vault on success or failure
 ```
 
-`AegisStateGraphOrchestrator` in `src/agents/graph.py` uses LangGraph when available and otherwise runs the same nodes in a native Python loop. A failed quality check routes back to the writer, up to the configured loop limit in code. The current workflow does not pause for a human reviewer.
+`src/agents/state.py` defines `ClinicalRecord`, `AdverseEvent`, `WorkflowInput`,
+`AgentState`, and partial node-update contracts with runtime input validation.
+Every execution starts a fresh state; stale caller-supplied scores, errors,
+approval flags, and counters are not trusted as resume/checkpoint data.
 
-## Implemented components
+`src/agents/graph.py` owns execution and routing. Both engines invoke the same
+node wrappers, partial updates, router, and finalizer. Native execution is
+available without LangGraph; `auto` selects it only when LangGraph is absent.
+Explicit `langgraph` mode requires that dependency. Compilation or execution
+failures are not retried through another engine. Node failures raise a sanitized
+`PipelineNodeError` without logging input, generated text, or exception payloads.
 
-- **State:** `AgentState` holds the input record, coded terms, draft, score, loop count, errors, and approval flag.
-- **Extraction:** `extract_and_code_data` uses simple keyword matching and numeric thresholds. It does not perform MedDRA lookup or general-purpose clinical coding.
-- **Writing:** `write_medical_narrative` assembles a fixed template from the fields present in the record.
-- **Validation:** `quality_control_check` checks selected text and input values. It is not a comprehensive fact-checking or compliance engine.
-- **De-identification:** `ClinicalDeidentifier` provides limited in-memory tokenization and regex redaction for the demonstration fields.
-- **CSV parsing:** `CDISCChunkParser` reads CSV files in chunks. It does not read SAS XPT files or assemble multiple CDISC domains into the `AgentState` schema.
+QC passes only when the score meets the configured threshold and there are no
+findings. Approval is evaluated before the revision cap, so a successful final
+attempt is approved. Exhaustion produces `review_required`, preserves findings,
+and appends a halt reason. `node_history` is a deterministic transition trace,
+not a persistent or regulatory audit trail.
 
-## Not implemented
+`src/agents/nodes/` contains source-grounded extraction, writing, and QC.
+Unreported facts remain "Not reported"; no trial phase, diagnosis, treatment,
+severity, or causality is invented. Rules and a QC score are not clinical review.
 
-The repository does not include an LLM client, production checkpoint database, external clinical-data connector, MedDRA license or terminology service, clinician portal, electronic signatures, or persistent audit trail. The configuration file lists example settings; it does not provision these services.
+`src/agents/utils/rules.py` owns compiled whole-term rules, conservative
+clause-scoped negation/uncertainty suppression, and finite non-negative ULN
+validation. Cue offsets are scanned once per clause; term matches use binary
+search rather than repeatedly rescanning growing prefixes. Inclusive triggers
+are ALT >= 3, AST >= 3, and bilirubin >= 2 times ULN. These are illustrative
+findings, not diagnostic criteria or licensed MedDRA coding.
 
-These boundaries should be kept explicit if the prototype is extended. A production architecture would need separate requirements, threat modeling, validation, and operational controls.
+`src/agents/utils/parser.py` streams UTF-8/BOM CSV using the standard library,
+preserving strings, quoted newlines, leading-zero identifiers, and empty values.
+It rejects empty/duplicate headers, missing subject IDs, ragged rows, and malformed
+quoting. `stream_chunks` uses the requested batch size; `iter_subject_records`
+keeps memory bounded, whereas `fetch_subject_records` materializes matching rows.
+File errors propagate rather than yielding empty success records. Domain joins,
+variable mapping, typed clinical-value conversion, and SAS XPT are not implemented.
+
+`src/runtime/config.py` validates immutable settings from `config/runtime.json`.
+No model, telemetry, or remote-service configuration is accepted. The optional
+graph dependency is isolated in `requirements-langgraph.txt`; native runtime only
+needs `cryptography`. Graph invocation disables inherited LangSmith tracing.
+
+## Privacy and output contracts
+
+`run_record` is the supported raw-record entry point. Its vault is scoped to
+one invocation, including concurrent executions on the same orchestrator.
+Restoration runs after either engine at the identical `restore_output` boundary.
+Only `output_narrative` is re-identified; raw state, coded terms, and draft remain
+tokenized. The caller must protect returned sensitive output.
+
+The lower-level `execute` API intentionally accepts already-de-identified input
+and returns tokenized output. It does not itself enforce the privacy gateway.
+No checkpoint database, external clinical connector, model service, clinician
+portal, electronic signatures, or persistent audit trail is included.

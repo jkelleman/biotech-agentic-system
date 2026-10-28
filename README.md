@@ -93,13 +93,17 @@ The `is_approved` flag indicates only whether the automated QC threshold was met
 <summary>Browse the repository layout</summary>
 
 ```text
-config/                  Example workflow configuration
-docs/                    Scope, architecture, security, and evaluation notes
-src/main.py              Local demonstration entry point
-src/agents/              Workflow state, graph, and deterministic nodes
-src/agents/utils/        CSV parser and illustrative de-identification helper
-tests/                   Unit and workflow tests
-requirements.txt         Python runtime dependencies
+config/runtime.json             Local engine, revision limit, and QC threshold
+docs/                           Scope, architecture, security, and evaluation notes
+src/main.py                     Local demonstration entry point
+src/agents/                     Workflow state, graph, and deterministic nodes
+src/agents/utils/               Streaming CSV, redaction/token vault, clinical rules
+src/runtime/                    Immutable validated runtime configuration
+src/utils/mock_generator.py     Streaming seeded synthetic clinical fixtures
+tests/                           Unit and workflow tests
+tests/benchmark.py              Isolated latency, throughput, memory, and parity checks
+requirements.txt                Python runtime dependencies
+requirements-langgraph.txt      Optional LangGraph runtime dependencies
 ```
 
 </details>
