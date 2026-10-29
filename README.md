@@ -4,109 +4,137 @@
 
 # AegisCSR
 
-**Local, deterministic clinical safety narrative drafts—without LLM calls.**
+**Deterministic clinical safety narrative drafts, local and LLM-free.**
 
-![CI](https://github.com/jkelleman/biotech-agentic-system/actions/workflows/tests.yml/badge.svg)
+![CI](https://github.com/jkelleman/health-biometrics-biotech-agentic-system/actions/workflows/tests.yml/badge.svg)
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB)
 ![Project status: prototype](https://img.shields.io/badge/status-prototype-informational)
 
-AegisCSR is a local Python prototype that transforms illustrative clinical-trial records into structured safety narrative drafts. Its in-memory workflow uses explicit rules and templates rather than external LLM calls, so the demo does not send records to an external model.
-
-> **In short:** Provide a trial record and get a template-based safety narrative draft from a local, rule-driven pipeline.
-
-## Key capabilities
-
-- **De-identification:** Masks configured identifier fields, email addresses, and phone numbers in clinical text, then replaces the subject ID with a temporary token during processing.
-- **Targeted extraction:** Identifies selected adverse-event terms and laboratory anomalies using keyword lists and configured numerical thresholds.
-- **Structured drafting:** Builds a narrative draft from the extracted data and a template.
-- **Automated quality checks:** Checks for selected omissions and records whether the configured automated QC threshold was met.
-- **ID restoration:** Restores the original subject ID to the local output after the draft is assembled.
+AegisCSR transforms structured clinical records and selected note findings into
+source-grounded narrative drafts. Both execution engines use the same typed state,
+nodes, routing, failure boundaries, and terminal approval logic. No model APIs,
+network data connectors, persistence, or external telemetry are configured.
 
 ## Quick start
 
-Requires Python 3.10 or later.
+Requires Python 3.10 or later. Use fictional data only.
 
 ```bash
-# Create and activate a virtual environment
 python -m venv .venv
 source .venv/bin/activate
-
-# Install dependencies
 python -m pip install -r requirements.txt
-
-# Run the illustrative local workflow
-PYTHONPATH=. python src/main.py
-
-# Run the tests
-PYTHONPATH=. python -m unittest discover -s tests -v
+python -m src.main --config config/runtime.json
+python -m unittest discover -s tests -v
 ```
 
-## Architecture
+Optional LangGraph execution:
 
-The pipeline processes a record in stages:
+```bash
+python -m pip install -r requirements-langgraph.txt
+```
+
+`config/runtime.json` is loaded only when passed with `--config`. Settings are
+`engine` (`auto`, `native`, `langgraph`), `max_writer_passes` (positive integer),
+and `min_compliance_score` (finite number in `(0, 1]`). Defaults match that file.
+`auto` chooses LangGraph if installed; only missing optional dependencies trigger
+native fallback. Compile or node errors never silently switch engines.
+
+## Pipeline
 
 ```text
-Raw record -> Redaction -> ID tokenization -> Targeted extraction
-                                               |
-                                               v
-Output draft <- ID restoration <- Automated QC <- Template drafting
+Validated raw record -> Local de-identification gateway
+    -> Extractor -> Writer -> QC -> Finalize -> Local subject-ID restoration
+                      ^       |
+                      +-------+ (bounded rewrite)
 ```
 
-<details>
-<summary>Execution modes</summary>
+The gateway recursively removes selected identifiers, scrubs supplied identifier
+values and name components from string fields, redacts common email/phone/SSN
+patterns, groups numeric ages over 89 as `90+`, and tokenizes subject IDs. Random
+128-bit tokens are owned by an invocation-local, locked vault. Originals are
+encrypted in memory; lookup keys are keyed digests, not plaintext identifiers.
+The vault is cleared on success or failure.
 
-The workflow uses LangGraph to coordinate pipeline nodes when LangGraph is installed. Otherwise, it uses a built-in Python loop. Both modes run the same underlying pipeline logic.
+The output narrative **contains restored subject IDs** and must remain inside a
+trusted local boundary. Other returned state fields remain pseudonymized. Token
+randomness is intentional; clinical findings, transitions, scores, and restored
+narratives are deterministic for the same validated inputs and settings.
 
-</details>
+Extraction uses precompiled whole-word rules, conservative clause-level negation
+and uncertainty handling, and inclusive ALT `>= 3x ULN` / bilirubin `>= 2x ULN`
+thresholds. It does not infer drug-induced liver injury from these values.
+Missing information is marked as not reported rather than invented.
 
-<details>
-<summary>What the demo processes</summary>
+CSV ingestion streams one row at a time using the standard library, preserves
+leading zeros, literal `NA`, and empty strings, and rejects malformed rows and
+duplicate headers. `iter_subject_records()` streams matching records;
+`fetch_subject_records()` intentionally collects that subject's events.
 
-The illustrative case in `src/main.py` runs through these steps:
+## Scope and limitations
 
-1. Redacts selected identifier fields, email addresses, and phone numbers in clinical notes.
-2. Replaces the subject ID with a temporary token.
-3. Extracts selected adverse-event and laboratory terms using keyword and threshold rules.
-4. Drafts a narrative from a template and checks for selected omissions.
-5. Restores the original subject ID in the local output.
+This is hardened engineering groundwork, **not a validated production clinical
+system**. Automated `is_approved` means only that the configured QC checks passed;
+it is not human approval or a regulatory compliance decision.
 
-The demo uses a hard-coded example. It does not load external clinical data or call an LLM.
+Selected-field and regex redaction is **not comprehensive HIPAA Safe Harbor
+de-identification**. Unknown names, dates, locations, images, unusual phone
+formats, quasi-identifiers, and other free-text PHI may remain. Tokenization is
+reversible pseudonymization, not anonymization. Python does not guarantee secure
+memory erasure. Do not enter real patient information.
 
-</details>
+Text rules are illustrative, not licensed MedDRA coding or diagnostic inference.
+Negation handling is deliberately conservative and can miss findings in complex
+clauses. Peak laboratory values alone cannot establish temporally related
+clinical syndromes. Clinical validation, access controls, secure deployment,
+human review, audit trails, signatures, and operational governance remain outside
+the implemented scope. Deployment must enforce network egress restrictions;
+application-local execution alone is not an operating-system air gap.
 
-## Project status and limitations
-
-<details>
-<summary>Read the prototype limitations</summary>
-
-AegisCSR is an experimental local prototype, not a validated or production-ready clinical system. Its deterministic Python rules do not establish clinical accuracy, regulatory compliance, or suitability for submission.
-
-De-identification is limited to the configured example fields and patterns. It does not establish HIPAA compliance or guarantee that a record is de-identified. Do not use real patient information.
-
-The `is_approved` flag indicates only whether the automated QC threshold was met; it is not human approval. MedDRA coding, narrative review, human approval, electronic signatures, and audit logging are not implemented. Business impact, regulatory compliance, and clinical accuracy have not been independently measured.
-
-</details>
-
-## Project structure
-
-<details>
-<summary>Browse the repository layout</summary>
+## Repository layout
 
 ```text
-config/runtime.json             Local engine, revision limit, and QC threshold
-docs/                           Scope, architecture, security, and evaluation notes
-src/main.py                     Local demonstration entry point
-src/agents/                     Workflow state, graph, and deterministic nodes
-src/agents/utils/               Streaming CSV, redaction/token vault, clinical rules
-src/runtime/                    Immutable validated runtime configuration
-src/utils/mock_generator.py     Streaming seeded synthetic clinical fixtures
-tests/                           Unit and workflow tests
-tests/benchmark.py              Isolated latency, throughput, memory, and parity checks
-requirements.txt                Python runtime dependencies
-requirements-langgraph.txt      Optional LangGraph runtime dependencies
+config/runtime.json             Validated local runtime settings
+src/runtime.py                  Configuration contract and loader
+src/main.py                     Fictional local demonstration
+src/agents/state.py             Typed clinical, workflow, and node-update schemas
+src/agents/graph.py              Shared transitions and dual execution engines
+src/agents/nodes/                Extraction, source-grounded drafting, and QC
+src/agents/utils/                Privacy gateway, CSV, validation, phenotyping
+tests/                          unittest coverage for both engines and utilities
+requirements.txt                Minimal local runtime
+requirements-langgraph.txt      Optional LangGraph runtime
 ```
 
-</details>
+## Public sample data
+
+The [SafetyGraphics `safetyData` package](https://github.com/SafetyGraphics/safetyData)
+provides PHUSE sample CDISC SDTM and ADaM datasets; its README states the PHUSE
+data are MIT licensed. Review upstream licensing and attribution before
+redistribution. Data are not bundled or fetched by this application.
+
+To export a subject-level example from R:
+
+```r
+install.packages("safetyData")
+adsl <- safetyData::adam_adsl
+names(adsl)[names(adsl) == "USUBJID"] <- "subject_id"
+write.csv(adsl, "adsl.csv", row.names = FALSE)
+```
+
+CSV rows remain strings. Callers must explicitly map demographics, events, and
+laboratory values into the validated clinical record schema; the parser does not
+join ADSL, ADAE, and ADLB or read SAS XPT.
+
+## Who might find this useful?
+
+Teams exploring clinical-trial safety workflows, pharmacovigilance, and narrative
+automation may find this a transparent starting point. Possible audiences include
+biopharma organizations such as Pfizer, Roche, Novartis, AstraZeneca, Merck, Amgen,
+Gilead Sciences, Moderna, and Regeneron, and clinical research organizations such
+as IQVIA, ICON, Parexel, Fortrea, and Labcorp.
+
+These are examples of organizations in the broader life-sciences space—not
+customers, users, or endorsers of this project.
 
 ## Documentation
 
@@ -114,12 +142,3 @@ requirements-langgraph.txt      Optional LangGraph runtime dependencies
 - [System architecture](docs/system_architecture.md)
 - [Security and regulatory considerations](docs/compliance_governance.md)
 - [Evaluation approach](docs/evaluation_observability.md)
-
-<details>
-<summary>30-second introduction</summary>
-
-Compiling clinical-trial safety narratives can require substantial manual effort to review medical reports, identify laboratory changes, and prepare summaries. Generative AI may help automate parts of that work, but clinical workflows also require careful control over source data and review of generated content.
-
-AegisCSR explores a different approach: a local, in-memory pipeline that applies explicit rules to redact selected identifiers, extract configured events and laboratory findings, and assemble a template-based draft. It does not call an external LLM. This prototype demonstrates a transparent workflow for exploration; its output still requires appropriate validation and human review before any clinical or regulatory use.
-
-</details>

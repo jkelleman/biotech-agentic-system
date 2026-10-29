@@ -40,48 +40,55 @@ class TestAegisStateGraph(unittest.TestCase):
     def test_pipeline_execution_and_exact_engine_parity(self):
         original = deepcopy(self.initial_state)
         results = []
-        for engine in ENGINES:
-            with self.subTest(engine=engine):
-                result = self.orchestrator(engine).execute(self.initial_state)
-                self.assertTrue(result["is_approved"])
-                self.assertEqual(result["status"], "approved")
-                self.assertEqual(result["compliance_score"], 1.0)
-                self.assertEqual(result["node_history"], ["extractor", "writer", "qc_checker", "finalize"])
-                self.assertIn("Cholecystitis", result["draft_narrative"])
-                self.assertIn("Vomiting", result["draft_narrative"])
-                self.assertNotIn("Nausea", result["draft_narrative"])
-                self.assertEqual(result["output_narrative"], result["draft_narrative"])
-                results.append(result)
+        with patch("src.agents.utils.deidentifier.secrets.token_hex", return_value="a" * 32):
+            for engine in ENGINES:
+                with self.subTest(engine=engine):
+                    result = self.orchestrator(engine).execute(self.initial_state)
+                    self.assertTrue(result["is_approved"])
+                    self.assertEqual(result["status"], "approved")
+                    self.assertEqual(result["compliance_score"], 1.0)
+                    self.assertEqual(result["node_history"], [
+                        "deidentify", "extractor", "writer", "qc_checker", "finalize", "output",
+                    ])
+                    self.assertIn("Cholecystitis", result["draft_narrative"])
+                    self.assertIn("Vomiting", result["draft_narrative"])
+                    self.assertNotIn("Nausea", result["draft_narrative"])
+                    self.assertEqual(result["output_narrative"], result["draft_narrative"])
+                    results.append(result)
         self.assertTrue(all(result == results[0] for result in results))
         self.assertEqual(self.initial_state, original)
 
     def test_failed_qc_has_identical_halt_state(self):
         results = []
-        for engine in ENGINES:
-            orchestrator = self.orchestrator(engine, passes=2)
-            orchestrator._nodes["qc_checker"] = lambda state: {
-                "compliance_score": 0.1, "errors": ["Source mismatch."]
-            }
-            results.append(orchestrator.execute(self.initial_state))
+        with patch("src.agents.utils.deidentifier.secrets.token_hex", return_value="a" * 32):
+            for engine in ENGINES:
+                orchestrator = self.orchestrator(engine, passes=2)
+                orchestrator._nodes["qc_checker"] = lambda state: {
+                    "compliance_score": 0.1, "errors": ["Source mismatch."]
+                }
+                results.append(orchestrator.execute(self.initial_state))
         self.assertTrue(all(result == results[0] for result in results))
         result = results[0]
         self.assertFalse(result["is_approved"])
         self.assertEqual(result["status"], "review_required")
         self.assertEqual(result["loop_count"], 2)
-        self.assertEqual(result["node_history"],
-                         ["extractor", "writer", "qc_checker", "writer", "qc_checker", "finalize"])
+        self.assertEqual(result["node_history"], [
+            "deidentify", "extractor", "writer", "qc_checker", "writer",
+            "qc_checker", "finalize", "output",
+        ])
         self.assertEqual(len(result["errors"]), 2)
         self.assertIn("SYSTEM_HALT", result["errors"][-1])
 
     def test_passing_final_revision_is_approved(self):
         results = []
-        for engine in ENGINES:
-            orchestrator = self.orchestrator(engine, passes=2)
-            def qc(state):
-                return {"compliance_score": 1.0 if state["loop_count"] == 2 else 0.1,
-                        "errors": [] if state["loop_count"] == 2 else ["Missing finding."]}
-            orchestrator._nodes["qc_checker"] = qc
-            results.append(orchestrator.execute(self.initial_state))
+        with patch("src.agents.utils.deidentifier.secrets.token_hex", return_value="a" * 32):
+            for engine in ENGINES:
+                orchestrator = self.orchestrator(engine, passes=2)
+                def qc(state):
+                    return {"compliance_score": 1.0 if state["loop_count"] == 2 else 0.1,
+                            "errors": [] if state["loop_count"] == 2 else ["Missing finding."]}
+                orchestrator._nodes["qc_checker"] = qc
+                results.append(orchestrator.execute(self.initial_state))
         self.assertTrue(all(result == results[0] for result in results))
         self.assertTrue(results[0]["is_approved"])
         self.assertEqual(results[0]["loop_count"], 2)
@@ -192,7 +199,7 @@ class TestAegisStateGraph(unittest.TestCase):
         with patch("builtins.__import__", side_effect=absent):
             result = AegisStateGraphOrchestrator().execute(self.initial_state)
             self.assertTrue(result["is_approved"])
-            with self.assertRaises(ModuleNotFoundError):
+            with self.assertRaises(RuntimeError):
                 self.orchestrator("langgraph")
 
     @unittest.skipUnless(HAS_LANGGRAPH, "Optional LangGraph dependency is not installed")

@@ -1,188 +1,181 @@
-"""Local, scoped pseudonymization and selected-identifier redaction.
-
-This is not a complete HIPAA Safe Harbor implementation. Python cannot guarantee
-memory zeroization; process isolation and governed input schemas remain necessary.
-"""
+"""Local pseudonymization gateway with explicit, short-lived token ownership."""
 
 import hashlib
 import hmac
 import re
 import secrets
 from threading import RLock
-from typing import Any
+from typing import Any, Dict, Iterable, Optional
 
 from cryptography.fernet import Fernet
 
-from src.agents.state import ClinicalRecord
 
-_EMAIL = re.compile(r"(?<![\w.+-])[\w.!#$%&'*+/=?^`{|}~-]+@[\w-]+(?:\.[\w-]+)+", re.I)
+_EMAIL = re.compile(r"(?<![\w.+-])[\w.!#$%&'*+/=?^`{|}~-]+@[\w-]+(?:\.[\w-]+)+", re.IGNORECASE)
 _PHONE = re.compile(
-    r"(?<!\w)(?:\+\d{1,3}[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?"
-    r"\d{3}[\s.-]?\d{4}(?:\s*(?:ext\.?|x|extension)\s*\d{1,6})?(?!\w)",
-    re.I,
+    r"(?<!\w)(?:(?:\+\d{1,3}[\s.-]*)?"
+    r"(?:\(\d{3}\)|\d{3})[\s.-]*\d{3}[\s.-]*\d{4}"
+    r"|\+[1-9]\d{7,14}"
+    r"|\+\d{1,3}[\s.-]+\d{1,4}[\s.-]+\d{3,4}[\s.-]+\d{3,4})"
+    r"(?:\s*(?:ext\.?|x|extension)\s*\d{1,6})?(?!\w)",
+    re.IGNORECASE,
 )
-_SSN = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")
-_TOKEN = re.compile(r"(?<![\w-])SUBJ-ANON-[0-9a-f]{32}(?![\w-])")
-_AGE = re.compile(r"\b(?:9\d|1[01]\d|12\d|130)[ -]*(?:years?[- ]old|y/?o)\b", re.I)
-
+_SSN = re.compile(r"(?<!\d)\d{3}[- ]\d{2}[- ]\d{4}(?!\d)")
+_TOKEN = re.compile(r"(?<![\w-])SUBJ-ANON-[A-Za-z0-9-]+(?![\w-])")
+_NAME_FIELDS = frozenset({"patient_name", "name", "first_name", "last_name", "full_name"})
 DEFAULT_IDENTIFIER_FIELDS = frozenset({
-    "patient_name", "name", "first_name", "last_name", "full_name",
-    "ssn", "social_security_number", "phone", "phone_number", "telephone",
-    "mobile", "fax", "email", "email_address", "address", "street_address",
-    "city", "county", "zip", "zip_code", "postal_code", "date_of_birth", "dob",
-    "birth_date", "medical_record_number", "mrn", "account_number",
-    "health_plan_number", "beneficiary_number", "license_number",
-    "device_identifier", "vehicle_identifier", "ip_address", "url",
+    *_NAME_FIELDS, "ssn", "social_security_number", "phone", "phone_number",
+    "telephone", "mobile", "fax", "email", "email_address", "address",
+    "street_address", "city", "county", "zip", "zip_code", "postal_code",
+    "dob", "date_of_birth", "birth_date", "medical_record_number", "mrn",
+    "health_plan_number", "account_number", "certificate_number", "license_number",
+    "vehicle_id", "device_id", "url", "ip_address", "biometric_id", "photo",
 })
 
 
-def _field_name(value: str) -> str:
-    return re.sub(r"[\s-]+", "_", value.strip().lower())
+def _field(key: str) -> str:
+    key = re.sub(r"([a-z])([A-Z])", r"\1_\2", key.strip())
+    normalized = re.sub(r"[\s-]+", "_", key.lower())
+    return "subject_id" if normalized == "usubjid" else normalized
 
 
 class ClinicalDeidentifier:
-    """Thread-safe in-memory vault. Prefer one context-managed instance per record."""
+    """Selected-field redaction, not a validated HIPAA Safe Harbor implementation.
 
-    def __init__(self, identifier_fields: frozenset[str] = DEFAULT_IDENTIFIER_FIELDS):
-        if any(not isinstance(field, str) or not field.strip() for field in identifier_fields):
-            raise ValueError("Identifier fields must be non-empty strings")
-        self.identifier_fields = frozenset(_field_name(field) for field in identifier_fields)
-        if "subject_id" in self.identifier_fields:
-            raise ValueError("subject_id must be tokenized, not removed")
+    Own one instance per workflow/session. Only subject IDs are reversible.
+    Mappings are keyed by keyed digests, with encrypted originals, under a lock.
+    """
+
+    def __init__(self, identifier_fields: Iterable[str] = ()) -> None:
+        self._fields = DEFAULT_IDENTIFIER_FIELDS | frozenset(_field(k) for k in identifier_fields)
+        if "subject_id" in self._fields:
+            raise ValueError("subject_id must be tokenized, not selected for removal.")
         self._lock = RLock()
-        self._cipher: Fernet | None = Fernet(Fernet.generate_key())
-        self._lookup_key = secrets.token_bytes(32)
-        self._token_registry: dict[bytes, str] = {}
-        self._reverse_registry: dict[str, bytes] = {}
+        self._cipher: Optional[Fernet] = Fernet(Fernet.generate_key())
+        self._digest_key = secrets.token_bytes(32)
+        self._token_registry: Dict[bytes, str] = {}
+        self._reverse_registry: Dict[str, bytes] = {}
+        self._closed = False
 
     def __enter__(self) -> "ClinicalDeidentifier":
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
+    def __exit__(self, *exc: object) -> None:
         self.close()
+
+    def _ensure_open(self) -> Fernet:
+        if self._closed or self._cipher is None:
+            raise RuntimeError("De-identification session is closed.")
+        return self._cipher
 
     def close(self) -> None:
         with self._lock:
             self._token_registry.clear()
             self._reverse_registry.clear()
-            self._lookup_key = b""
+            self._digest_key = b""
             self._cipher = None
+            self._closed = True
 
-    def _require_cipher(self) -> Fernet:
-        if self._cipher is None:
-            raise RuntimeError("Token vault is closed")
-        return self._cipher
+    def _tokenize(self, value: str) -> str:
+        cipher = self._ensure_open()
+        digest = hmac.digest(self._digest_key, value.encode("utf-8"), hashlib.sha256)
+        if digest not in self._token_registry:
+            token = "SUBJ-ANON-" + secrets.token_hex(16)
+            while token in self._reverse_registry:
+                token = "SUBJ-ANON-" + secrets.token_hex(16)
+            self._token_registry[digest] = token
+            self._reverse_registry[token] = cipher.encrypt(value.encode("utf-8"))
+        return self._token_registry[digest]
 
-    def anonymize_patient_record(self, raw_record: ClinicalRecord) -> ClinicalRecord:
+    def anonymize_patient_record(self, raw_record: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(raw_record, dict):
-            raise ValueError("Clinical record must be an object")
-        raw_id = raw_record.get("subject_id")
-        if not isinstance(raw_id, str) or not raw_id.strip():
-            raise ValueError("subject_id must be a non-empty string")
+            raise ValueError("Clinical record must be an object.")
         with self._lock:
-            cipher = self._require_cipher()
-            identifiers: set[str] = set()
+            self._ensure_open()
+            literals = set()
+            subjects: Dict[str, str] = {}
 
             def collect(value: Any, selected: bool = False, name: bool = False) -> None:
                 if isinstance(value, dict):
-                    for key, child in value.items():
+                    for key, item in value.items():
                         if not isinstance(key, str):
-                            raise ValueError("Clinical record keys must be strings")
-                        field = _field_name(key)
-                        if field == "subject_id" and child != raw_id:
-                            raise ValueError("Conflicting subject identifiers in one record")
-                        collect(child, selected or field in self.identifier_fields,
-                                name or field in {"patient_name", "full_name", "name"})
+                            raise ValueError("Clinical record field names must be strings.")
+                        field = _field(key)
+                        if field == "subject_id":
+                            if not isinstance(item, str) or not item.strip():
+                                raise ValueError("subject_id must be a non-empty string.")
+                            subjects[item] = self._tokenize(item)
+                        else:
+                            collect(item, selected or field in self._fields, name or field in _NAME_FIELDS)
                 elif isinstance(value, list):
-                    for child in value:
-                        collect(child, selected, name)
-                elif isinstance(value, (str, int, float)) and not isinstance(value, bool):
-                    text = str(value).strip()
-                    if "SUBJ-ANON-" in text:
-                        raise ValueError("Input contains a reserved subject token marker")
-                    if selected and text:
-                        identifiers.add(text)
+                    for item in value:
+                        collect(item, selected, name)
+                elif isinstance(value, (str, int, float, bool)) or value is None:
+                    if selected and value is not None and str(value).strip():
+                        text = str(value).strip()
+                        literals.update((text, text.casefold()))
                         if name:
-                            identifiers.update(part for part in text.split() if len(part) >= 2)
-                elif value is not None and not isinstance(value, bool):
-                    raise ValueError("Clinical records must contain JSON-compatible values")
+                            for part in re.findall(r"[^\W\d_]+(?:['-][^\W\d_]+)*", text):
+                                literals.update((part, part.casefold()))
+                else:
+                    raise ValueError("Clinical record must contain only JSON-compatible values.")
 
             collect(raw_record)
-            # One compiled matcher per record, longest-first to avoid partial substitutions.
-            selected_values = "|".join(
-                re.escape(value).replace(r"\ ", r"\s+")
-                for value in sorted(identifiers, key=lambda x: (-len(x), x))
+            subject_pattern = (
+                re.compile(r"(?<!\w)(?:" + "|".join(re.escape(s) for s in sorted(subjects, key=len, reverse=True)) + r")(?!\w)")
+                if subjects else None
             )
-            selected_branch = (
-                r"|(?P<identifier>(?<!\w)(?:" + selected_values + r")(?!\w))"
-                if identifiers else ""
+            # Tokens are protected from subsequent literal redaction.
+            literal_pattern = (
+                re.compile(
+                    r"SUBJ-ANON-[a-f0-9]{32}|(?<!\w)(?:"
+                    + "|".join(re.escape(s) for s in sorted(literals, key=len, reverse=True))
+                    + r")(?!\w)", re.IGNORECASE
+                ) if literals else None
             )
-            # One substitution prevents tokenizing an ID embedded in a longer selected value.
-            value_pattern = re.compile(
-                r"(?P<email>" + _EMAIL.pattern + r")|"
-                r"(?P<phone>" + _PHONE.pattern + r")|"
-                r"(?P<ssn>" + _SSN.pattern + r")|"
-                r"(?P<subject>(?<![\w-])(?-i:" + re.escape(raw_id) + r")(?![\w-]))"
-                + selected_branch, re.I,
-            )
-            digest = hmac.new(self._lookup_key, raw_id.encode(), hashlib.sha256).digest()
-            token = self._token_registry.get(digest)
-            if token is None:
-                token = "SUBJ-ANON-" + secrets.token_hex(16)
-                while token in self._reverse_registry:
-                    token = "SUBJ-ANON-" + secrets.token_hex(16)
-                self._token_registry[digest] = token
-                self._reverse_registry[token] = cipher.encrypt(raw_id.encode())
 
-            def scrub_text(text: str) -> str:
-                def replace_value(match: re.Match[str]) -> str:
-                    value = match.group()
-                    if value == raw_id:
-                        return token
-                    if match.lastgroup == "email":
-                        return "[REDACTED_EMAIL]"
-                    if match.lastgroup == "phone":
-                        return "[REDACTED_PHONE]"
-                    if match.lastgroup == "ssn":
-                        return "[REDACTED_SSN]"
-                    return "[REDACTED_IDENTIFIER]"
+            def scrub(text: str) -> str:
+                if subject_pattern:
+                    text = subject_pattern.sub(lambda m: subjects[m.group()], text)
+                text = _EMAIL.sub("[REDACTED_EMAIL]", text)
+                text = _PHONE.sub("[REDACTED_PHONE]", text)
+                text = _SSN.sub("[REDACTED_SSN]", text)
+                if literal_pattern:
+                    text = literal_pattern.sub(
+                        lambda m: m.group() if m.group() in self._reverse_registry
+                        else "[REDACTED_IDENTIFIER]",
+                        text,
+                    )
+                return text
 
-                text = value_pattern.sub(replace_value, text)
-                # Preserve generated tokens from broad numeric/selected-value matches.
-                def scrub_fragment(fragment: str) -> str:
-                    return _AGE.sub("90+ years old", fragment)
-
-                parts = re.split(f"({_TOKEN.pattern})", text)
-                return "".join(part if _TOKEN.fullmatch(part) else scrub_fragment(part) for part in parts)
-
-            def scrub(value: Any) -> Any:
+            def clean(value: Any) -> Any:
                 if isinstance(value, dict):
-                    return {
-                        key: (token if _field_name(key) == "subject_id" and child == raw_id
-                              else "90+" if _field_name(key) == "age" and type(child) is int and child > 89
-                              else scrub(child))
-                        for key, child in value.items()
-                        if _field_name(key) not in self.identifier_fields
-                    }
+                    result = {}
+                    for key, item in value.items():
+                        field = _field(key)
+                        if field in self._fields:
+                            continue
+                        if field == "subject_id":
+                            result[key] = subjects[item]
+                        elif field == "age" and type(item) is int and item > 89:
+                            result[key] = "90+"
+                        else:
+                            result[key] = clean(item)
+                    return result
                 if isinstance(value, list):
-                    return [scrub(child) for child in value]
-                return scrub_text(value) if isinstance(value, str) else value
+                    return [clean(item) for item in value]
+                return scrub(value) if isinstance(value, str) else value
 
-            return scrub(raw_record)
+            return clean(raw_record)
 
-    def reidentify_narrative(self, output_text: str) -> str:
-        """One-pass exact-token restoration; unknown or malformed tokens fail closed."""
-        if not isinstance(output_text, str):
-            raise ValueError("Narrative must be a string")
+    def reidentify_narrative(self, text: str) -> str:
+        """Restore whole tokens exactly once; reject foreign/session-expired tokens."""
         with self._lock:
-            cipher = self._require_cipher()
-            if "SUBJ-ANON-" in _TOKEN.sub("", output_text):
-                raise ValueError("Malformed subject token in output")
-
-            def restore(match: re.Match[str]) -> str:
-                encrypted = self._reverse_registry.get(match.group())
-                if encrypted is None:
-                    raise ValueError("Unknown subject token in output")
-                return cipher.decrypt(encrypted).decode()
-
-            return _TOKEN.sub(restore, output_text)
+            cipher = self._ensure_open()
+            tokens = set(_TOKEN.findall(text))
+            if tokens - self._reverse_registry.keys():
+                raise ValueError("Narrative contains an unknown subject token.")
+            originals = {
+                token: cipher.decrypt(self._reverse_registry[token]).decode("utf-8")
+                for token in tokens
+            }
+            return _TOKEN.sub(lambda match: originals[match.group()], text)

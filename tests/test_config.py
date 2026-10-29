@@ -20,5 +20,5 @@ class TestRuntimeConfig(unittest.TestCase):
             path.write_text(json.dumps({"engine": "native", "max_writer_passes": 2}))
             self.assertEqual(RuntimeConfig.from_file(path), RuntimeConfig(engine="native", max_writer_passes=2))
             path.write_text('{"external_model": "not-supported"}')
-            with self.assertRaises(TypeError):
+            with self.assertRaises(ValueError):
                 RuntimeConfig.from_file(path)

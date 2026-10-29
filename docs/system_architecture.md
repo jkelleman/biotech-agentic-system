@@ -1,72 +1,79 @@
 # System Architecture
 
-## Local execution and responsibility boundaries
+## Responsibility boundaries
+
+`src/runtime.py` validates immutable local settings. `src/agents/state.py`
+defines TypedDict contracts for clinical records, events, laboratory data,
+workflow state, and partial node updates. `utils/validation.py` performs runtime
+validation before execution; invalid records raise errors without echoing values.
+Input records are copied, not mutated. Each call starts fresh; supplied drafts,
+QC results, and loop counters are never trusted as resumable checkpoints.
+
+`utils/deidentifier.py` owns identifier removal and an invocation-local token
+vault. Raw records never enter LangGraph. The graph and native engine receive
+only the privacy-gateway output. De-identification is not a guarantee of
+anonymity; see [privacy boundaries](compliance_governance.md).
+
+## Shared state machine
 
 ```text
-run_record(record)
-  validate input
-  create per-record token vault / recursively redact selected identifiers
-  initialize typed state
-    extractor -> writer -> qc_checker
-                   ^           |
-                   |--rewrite--|
-                               |
-                            finalize
-  restore_output (only output_narrative contains the original subject ID)
-  close vault on success or failure
+validate -> deidentify -> extractor -> writer -> qc_checker
+                                        ^           |
+                                        | rewrite   |
+                                        +-----------+
+                                                    |
+                                      approve / exhausted
+                                                    v
+                                                finalize
+                                                    |
+                                                    v
+                                  output (local subject-ID restoration)
 ```
 
-`src/agents/state.py` defines `ClinicalRecord`, `AdverseEvent`, `WorkflowInput`,
-`AgentState`, and partial node-update contracts with runtime input validation.
-Every execution starts a fresh state; stale caller-supplied scores, errors,
-approval flags, and counters are not trusted as resume/checkpoint data.
+Both engines invoke the same node wrappers and transition function.
+`node_history` records completed boundaries. A node failure logs only its name
+and raises `PipelineExecutionError` without exposing underlying exception values;
+no partial narrative is released. Validation errors are explicit `ValueError`s.
+Compile failures and broken dependency installations propagate, rather than
+silently switching engines.
 
-`src/agents/graph.py` owns execution and routing. Both engines invoke the same
-node wrappers, partial updates, router, and finalizer. Native execution is
-available without LangGraph; `auto` selects it only when LangGraph is absent.
-Explicit `langgraph` mode requires that dependency. Compilation or execution
-failures are not retried through another engine. Node failures raise a sanitized
-`PipelineNodeError` without logging input, generated text, or exception payloads.
+QC approval requires both a score meeting the configured threshold and no
+reported errors. A successful last permitted writer pass is approved. Exhaustion
+sets `is_approved=False`, `status=review_required`, and a `SYSTEM_HALT` error.
+Finalization and output run in both modes. Unknown output tokens fail closed.
+Mappings are cleared by context-manager exit even after errors.
 
-QC passes only when the score meets the configured threshold and there are no
-findings. Approval is evaluated before the revision cap, so a successful final
-attempt is approved. Exhaustion produces `review_required`, preserves findings,
-and appends a halt reason. `node_history` is a deterministic transition trace,
-not a persistent or regulatory audit trail.
+`execute()` returns a narrative with restored subject IDs, but `raw_data` and
+`coded_terms` remain pseudonymized. This mixed-privacy result must stay local.
+Tokens vary across invocations; source-grounded narrative content, QC results,
+and transitions do not. No persistent graph checkpoint or cross-call state is
+used. One orchestrator may execute concurrent independent calls.
 
-`src/agents/nodes/` contains source-grounded extraction, writing, and QC.
-Unreported facts remain "Not reported"; no trial phase, diagnosis, treatment,
-severity, or causality is invented. Rules and a QC score are not clinical review.
+## Clinical utilities
 
-`src/agents/utils/rules.py` owns compiled whole-term rules, conservative
-clause-scoped negation/uncertainty suppression, and finite non-negative ULN
-validation. Cue offsets are scanned once per clause; term matches use binary
-search rather than repeatedly rescanning growing prefixes. Inclusive triggers
-are ALT >= 3, AST >= 3, and bilirubin >= 2 times ULN. These are illustrative
-findings, not diagnostic criteria or licensed MedDRA coding.
+- CSV ingestion uses a strict UTF-8/BOM-aware standard-library reader with
+  constant row memory, no numeric or NA coercion, and explicit structural errors.
+  Header-only files are allowed; subject filtering requires a subject column
+  even when no rows exist. Collecting all matching events is explicitly opt-in.
+- Text phenotyping scans precompiled keyword/context rules once per clause.
+  Negated, historical, and uncertain contexts suppress findings; explicit
+  positive assertions reset suppression. Post-negation conservatively discards
+  candidate findings in that clause. Terms retain encounter order and are deduplicated.
+- Laboratory rules share finite non-negative numeric validation and inclusive
+  thresholds between extraction and QC. Missing labs are not assumed normal.
+- Drafting reports supplied demographics and event attributes, marks missing
+  data as not reported, and adds no hard-coded trial indication or causality.
+  QC checks source-value presence and exact threshold finding text, not general
+  clinical truth or unsupported extra statements.
 
-`src/agents/utils/parser.py` streams UTF-8/BOM CSV using the standard library,
-preserving strings, quoted newlines, leading-zero identifiers, and empty values.
-It rejects empty/duplicate headers, missing subject IDs, ragged rows, and malformed
-quoting. `stream_chunks` uses the requested batch size; `iter_subject_records`
-keeps memory bounded, whereas `fetch_subject_records` materializes matching rows.
-File errors propagate rather than yielding empty success records. Domain joins,
-variable mapping, typed clinical-value conversion, and SAS XPT are not implemented.
+## Local deployment
 
-`src/runtime/config.py` validates immutable settings from `config/runtime.json`.
-No model, telemetry, or remote-service configuration is accepted. The optional
-graph dependency is isolated in `requirements-langgraph.txt`; native runtime only
-needs `cryptography`. Graph invocation disables inherited LangSmith tracing.
+The default runtime has no LangGraph dependency. Install
+`requirements-langgraph.txt` to use the optional graph engine. Ambient LangSmith
+tracing is disabled around graph invocation. No callbacks, persistence, remote
+models, or network connectors are configured. For an actual air gap, provision
+reviewed packages offline and deny network egress at the host/container boundary.
 
-## Privacy and output contracts
-
-`run_record` is the supported raw-record entry point. Its vault is scoped to
-one invocation, including concurrent executions on the same orchestrator.
-Restoration runs after either engine at the identical `restore_output` boundary.
-Only `output_narrative` is re-identified; raw state, coded terms, and draft remain
-tokenized. The caller must protect returned sensitive output.
-
-The lower-level `execute` API intentionally accepts already-de-identified input
-and returns tokenized output. It does not itself enforce the privacy gateway.
-No checkpoint database, external clinical connector, model service, clinician
-portal, electronic signatures, or persistent audit trail is included.
+Authentication, authorization, durable audit storage, clinician review,
+electronic signatures, full CDISC domain assembly, and clinical terminology
+licensing are not implemented.

@@ -35,4 +35,7 @@ class RuntimeConfig:
             settings = json.load(handle)
         if not isinstance(settings, dict):
             raise ValueError("Runtime configuration must be an object")
-        return cls(**settings)
+        try:
+            return cls(**settings)
+        except TypeError:
+            raise ValueError("Runtime configuration contains unsupported settings") from None

@@ -48,110 +48,97 @@ class TestClinicalDeidentifier(unittest.TestCase):
         self.assertIn("USUBJID-THR902-142", restored)
         self.assertNotIn(anon_id, restored)
 
-    def test_nested_identifier_values_are_scrubbed_without_mutation(self):
-        self.raw_record.update({
-            "email": "l.vance+trial@clinic.org",
-            "date_of_birth": "1972-06-05",
-            "contact": {"address": "123 Main Street", "phone": "+1 (212) 555-0199 ext. 42"},
-            "adverse_events": [{"description": "Vance has nausea; SSN 000-12-3456"}],
-            "clinical_notes": (
-                "Leonard Vance (USUBJID-THR902-142), born 1972-06-05, "
-                "123 Main Street; l.vance+trial@clinic.org; +1 (212) 555-0199 ext. 42"
-            ),
-        })
-        original = deepcopy(self.raw_record)
-        safe = self.deidentifier.anonymize_patient_record(self.raw_record)
-        self.assertEqual(self.raw_record, original)
-        rendered = str(safe)
-        for secret in ("Leonard", "Vance", "1972-06-05", "123 Main Street",
-                       "000-12-3456", "l.vance", "212", "USUBJID-THR902-142"):
-            self.assertNotIn(secret, rendered)
-        restored = self.deidentifier.reidentify_narrative(safe["clinical_notes"])
-        self.assertIn(self.raw_record["subject_id"], restored)
-        self.assertNotIn("Vance", restored)
+    def test_selected_identifiers_are_scrubbed_recursively_without_mutation(self):
+        record = {
+            **self.raw_record,
+            "nested": {
+                "PatientName": "Leonard Vance",
+                "MRN": "MRN-001",
+                "visits": [{"notes": "Vance, LEONARD: MRN-001 / USUBJID-THR902-142"}],
+            },
+            "clinical_notes": "Leonard Vance (Vance) SSN 000-12-3456. USUBJID-THR902-142.",
+        }
+        original = deepcopy(record)
+        safe = self.deidentifier.anonymize_patient_record(record)
+        serialized = str(safe)
+        for value in ("Leonard", "Vance", "MRN-001", "000-12-3456", record["subject_id"]):
+            self.assertNotIn(value.lower(), serialized.lower())
+        self.assertIn(safe["subject_id"], safe["clinical_notes"])
+        self.assertEqual(record, original)
+        self.assertNotIn("MRN", safe["nested"])
 
-    def test_phone_formats_and_email_patterns(self):
-        for phone in ("2125550199", "212-555-0199", "(212) 555-0199",
-                      "+1 212 555 0199", "+44 020 794 0958", "212.555.0199 x123"):
+    def test_common_phone_formats_and_emails(self):
+        for phone in (
+            "4155552671", "415-555-2671", "415.555.2671", "415 555 2671",
+            "(415) 555-2671", "+1 (415) 555-2671", "+1-415-555-2671",
+            "415-555-2671 ext. 123", "4155552671 x123", "+442079460958",
+            "+44 20 7946 0958",
+        ):
             with self.subTest(phone=phone):
                 safe = self.deidentifier.anonymize_patient_record({
-                    "subject_id": "001", "clinical_notes": f"Contact {phone} or a+b@sub.example.org."
+                    "subject_id": "S1", "clinical_notes": f"Contact {phone}, a+b@example.co.uk."
                 })
-                self.assertNotIn(phone, safe["clinical_notes"])
-                self.assertIn("[REDACTED_PHONE]", safe["clinical_notes"])
-                self.assertIn("[REDACTED_EMAIL]", safe["clinical_notes"])
+                self.assertEqual(safe["clinical_notes"], "Contact [REDACTED_PHONE], [REDACTED_EMAIL].")
 
-    def test_subject_references_are_replaced_without_prefix_collisions(self):
+    def test_custom_field_and_age_aggregation(self):
+        with ClinicalDeidentifier(identifier_fields=["screening_id"]) as deidentifier:
+            safe = deidentifier.anonymize_patient_record({
+                "subject_id": "S1", "screening_id": "SCREEN-99",
+                "clinical_notes": "SCREEN-99", "age": 95,
+            })
+            self.assertNotIn("screening_id", safe)
+            self.assertNotIn("SCREEN-99", safe["clinical_notes"])
+            self.assertEqual(safe["age"], "90+")
+
+    def test_unicode_case_variants_cannot_bypass_redaction(self):
         safe = self.deidentifier.anonymize_patient_record({
-            "subject_id": "001", "clinical_notes": "Subject 001, not 0012."
+            "subject_id": "S1", "patient_name": "Ipek", "clinical_notes": "Ipek ıpek İpek"
         })
-        token = safe["subject_id"]
-        self.assertEqual(safe["clinical_notes"], f"Subject {token}, not 0012.")
-        restored = self.deidentifier.reidentify_narrative(f"{token}, {token}.")
-        self.assertEqual(restored, "001, 001.")
-        with self.assertRaises(ValueError):
-            self.deidentifier.reidentify_narrative(token + "0")
-
-    def test_age_aggregation(self):
+        self.assertEqual(safe["clinical_notes"], " ".join(["[REDACTED_IDENTIFIER]"] * 3))
         safe = self.deidentifier.anonymize_patient_record({
-            "subject_id": "001", "age": 97, "clinical_notes": "97-year-old patient."
+            "subject_id": "S1", "patient_name": "Straße", "clinical_notes": "Straße STRASSE"
         })
-        self.assertEqual(safe["age"], "90+")
-        self.assertEqual(safe["clinical_notes"], "90+ years old patient.")
+        self.assertEqual(safe["clinical_notes"], " ".join(["[REDACTED_IDENTIFIER]"] * 2))
 
-    def test_concurrent_assignments_and_exact_restoration(self):
-        ids = ["001"] * 50 + [f"subject-{index}" for index in range(50)]
-        def anonymize(subject):
-            return self.deidentifier.anonymize_patient_record({"subject_id": subject})["subject_id"]
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            tokens = list(pool.map(anonymize, ids))
-        self.assertEqual(len(set(tokens[:50])), 1)
-        self.assertEqual(len(set(tokens)), 51)
-        for subject, token in zip(ids, tokens):
-            self.assertEqual(self.deidentifier.reidentify_narrative(token), subject)
+    def test_thread_safe_stable_and_unpredictable_tokens(self):
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            records = list(executor.map(
+                self.deidentifier.anonymize_patient_record,
+                [{"subject_id": f"S{i % 10}"} for i in range(200)],
+            ))
+        tokens = [record["subject_id"] for record in records]
+        self.assertEqual(len(set(tokens)), 10)
+        for i, token in enumerate(tokens):
+            self.assertRegex(token, r"^SUBJ-ANON-[a-f0-9]{32}$")
+            self.assertEqual(self.deidentifier.reidentify_narrative(token), f"S{i % 10}")
         self.assertTrue(all(isinstance(key, bytes) for key in self.deidentifier._token_registry))
+        self.assertNotIn(b"S1", self.deidentifier._reverse_registry.values())
 
-    def test_closed_and_foreign_vault_fail_closed(self):
-        token = self.deidentifier.anonymize_patient_record(self.raw_record)["subject_id"]
+    def test_vault_isolation_unknown_tokens_and_cleanup(self):
+        token = self.deidentifier.anonymize_patient_record({"subject_id": "S1"})["subject_id"]
         with ClinicalDeidentifier() as other:
             with self.assertRaises(ValueError):
                 other.reidentify_narrative(token)
+            self.assertNotEqual(token, other.anonymize_patient_record({"subject_id": "S1"})["subject_id"])
         self.deidentifier.close()
+        self.assertEqual(self.deidentifier._reverse_registry, {})
         with self.assertRaises(RuntimeError):
             self.deidentifier.reidentify_narrative(token)
         with self.assertRaises(RuntimeError):
-            self.deidentifier.anonymize_patient_record(self.raw_record)
+            self.deidentifier.anonymize_patient_record({"subject_id": "S1"})
 
-    def test_reserved_markers_and_invalid_ids_are_rejected(self):
-        for subject in ("", None, 123, "SUBJ-ANON-" + "0" * 32):
-            with self.subTest(subject=subject), self.assertRaises(ValueError):
-                self.deidentifier.anonymize_patient_record({"subject_id": subject})
+    def test_restoration_is_whole_token_and_nonrecursive(self):
+        first = self.deidentifier.anonymize_patient_record({"subject_id": "S1"})["subject_id"]
+        second = self.deidentifier.anonymize_patient_record({"subject_id": first})["subject_id"]
+        self.assertEqual(self.deidentifier.reidentify_narrative(f"{second}, {first}; {first}."), f"{first}, S1; S1.")
+        for malformed in (first + "a", first + "-suffix", "SUBJ-ANON-foreign"):
+            with self.subTest(token=malformed), self.assertRaises(ValueError):
+                self.deidentifier.reidentify_narrative(malformed)
 
-    def test_conflicting_nested_subjects_are_rejected(self):
-        with self.assertRaises(ValueError):
-            self.deidentifier.anonymize_patient_record({
-                "subject_id": "001", "nested": {"subject_id": "002"}
-            })
-
-    def test_selected_identifier_containing_subject_is_redacted_as_a_whole(self):
-        record = {
-            "subject_id": "SYN-001",
-            "medical_record_number": "MRN-SYN-001",
-            "address": "Subject SYN-001 Example Lane",
-            "clinical_notes": "SYN-001; MRN-SYN-001; Subject SYN-001 Example Lane.",
-        }
-        safe = self.deidentifier.anonymize_patient_record(record)
-        restored = self.deidentifier.reidentify_narrative(safe["clinical_notes"])
-        self.assertEqual(
-            restored, "SYN-001; [REDACTED_IDENTIFIER]; [REDACTED_IDENTIFIER].",
-        )
-
-    def test_name_inside_unselected_email_does_not_break_email_redaction(self):
-        safe = self.deidentifier.anonymize_patient_record({
-            "subject_id": "001", "patient_name": "Leonard Vance",
-            "clinical_notes": "Contact vance+study@hospital.example or Leonard.Vance@other.example.",
-        })
-        self.assertEqual(safe["clinical_notes"], "Contact [REDACTED_EMAIL] or [REDACTED_EMAIL].")
+    def test_malformed_data_fails_closed(self):
+        for record in ([], {"subject_id": None}, {"subject_id": 123}, {"subject_id": " "}, {"value": object()}):
+            with self.subTest(record=record), self.assertRaises(ValueError):
+                self.deidentifier.anonymize_patient_record(record)
 
 if __name__ == "__main__":
     unittest.main()
